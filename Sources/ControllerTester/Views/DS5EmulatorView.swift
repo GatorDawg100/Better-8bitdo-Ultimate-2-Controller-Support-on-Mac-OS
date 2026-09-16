@@ -209,19 +209,7 @@ public struct DS5EmulatorView: View {
                 .fontWeight(.semibold)
             
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Valheim (Unity) - Native 8BitDo BepInEx Plugin")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                        Text("Directly maps the 8BitDo in 2.4G D-Input mode with full analog triggers and zero latency. Built & installed in Valheim/BepInEx/plugins/EightBitDoUltimate2/.")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
+
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
