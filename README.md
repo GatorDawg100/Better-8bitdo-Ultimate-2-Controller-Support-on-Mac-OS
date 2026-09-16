@@ -1,145 +1,131 @@
-# Controller Tester (macOS)
+# Controller Tester & DualSense 5 Emulation Suite (macOS)
 
-A high-performance, native macOS game controller diagnostic and testing application built entirely in **Swift**, **SwiftUI**, and Apple's **GameController** and **CoreHaptics** frameworks.
+A native macOS controller diagnostic and emulation suite written in **Swift 6** and **SwiftUI**. 
 
-Supports 8BitDo Ultimate / Pro controllers, Xbox Wireless Controllers, Nintendo Switch Pro Controllers, MFi controllers, and generic USB/Bluetooth HID gamepads.
+It includes:
+1. **`EightBitDoKit`**: A modular, userspace driver library for the **8BitDo Ultimate 2 Wireless Controller** (2.4G D-Input mode, VID `0x2DC8`, PID `0x6012`). Unlocks full 500 Hz input, 6-axis IMU gyro/accel attitude, physical back paddles (M1/M2), and force-feedback motor rumble.
+2. **`DualSenseEmulationKit`**: A high-performance DualSense 5 (DS5) emulator (VID `0x054C`, PID `0x0CE6`) converting 8BitDo D-Input inputs into virtual PlayStation DualSense controllers for 100% macOS game compatibility (Steam, Valheim, RPCS3, Ryujinx, Apple Arcade, Crossover).
+3. **Controller Tester & Remapper Application**: Unified macOS application with live gamepad visualizers, 72-bin circularity drift analysis, trigger health, button remapping (including mapping back paddles to the PS5 Touchpad Click), and background menu bar operation.
 
 ---
 
-## Features
+## Architecture & Modular Libraries
 
-### 1. 🎮 Real-Time Interactive Gamepad Visualizer
-- High-fidelity vector gamepad layout with sub-millisecond visual feedback.
-- Real-time highlights for:
-  - **Action Buttons**: A / B / X / Y (Cross, Circle, Square, Triangle).
-  - **Shoulder Buttons**: LB / L1, RB / R1.
-  - **Triggers**: LT / L2, RT / R2 with smooth analog percentage bars.
-  - **D-Pad**: Up, Down, Left, Right directional vectors.
-  - **Thumbsticks**: Left and Right sticks showing deflection coordinates and L3 / R3 stick-click states.
-  - **System Buttons**: Menu / Start, Options / Share / Select, Home / Guide.
-  - **Vibration Shake**: Visual tactile animation synchronized with active haptics.
+```
+                                          ┌────────────────────────────────────────┐
+                                          │      8BitDo Ultimate 2 Controller      │
+                                          │     (2.4G D-Input Mode: 0x2DC8/0x6012) │
+                                          └───────────────────┬────────────────────┘
+                                                              │ 34-byte Report ID 1 (500 Hz)
+                                                              ▼
+                                          ┌────────────────────────────────────────┐
+                                          │             EightBitDoKit              │
+                                          │ • IOHIDManager userspace driver        │
+                                          │ • 6-axis IMU complementary fusion      │
+                                          │ • Report ID 5 rumble motor sender      │
+                                          └───────────────────┬────────────────────┘
+                                                              │ EightBitDoState
+                                                              ▼
+                                          ┌────────────────────────────────────────┐
+                                          │         DualSenseEmulationKit          │
+                                          │ • Button Remapper & Deadzone Tuner     │
+                                          │ • Paddle M1 → PS5 Touchpad Click       │
+                                          │ • 64-byte USB DualSense Report Packer  │
+                                          │ • Virtual Device (CoreHID / IOKit)     │
+                                          │ • Rumble loopback to 8BitDo motors     │
+                                          └───────────────────┬────────────────────┘
+                                                              │ Virtual Sony DualSense (0x054C/0x0CE6)
+                                                              ▼
+                                          ┌────────────────────────────────────────┐
+                                          │       macOS Games & Applications       │
+                                          │   Steam • Valheim • RPCS3 • Ryujinx    │
+                                          │   Apple Arcade • macOS GameController  │
+                                          └────────────────────────────────────────┘
+```
 
-### 2. 🎯 Thumbstick Precision & Drift Diagnostics
-- **Dual Precision Radars**: Polar coordinate plots with concentric range rings (25%, 50%, 75%, 100%) and vector line pointers.
-- **Configurable Deadzone**: Interactive slider (1% to 25%) with real-time deadzone ring visualization.
-- **Center Drift Detection**: Real-time resting position drift tracker with min/max offset recording and drift alerts.
-- **Circularity 360° Benchmark**:
-  - 72-bin circular perimeter profiling (5° resolution).
-  - Measures outer gate boundary distortion.
-  - Calculates **Average Circularity Error %** and **Max Deviation %**.
-  - Provides hardware quality score: *Exceptional (< 5%)*, *Good (5–10%)*, *Acceptable (10–16%)*, or *High Deviation (> 16%)*.
+### 1. `EightBitDoKit` (Swift Library Target)
+- Modular standalone Swift package target.
+- Directly opens the 8BitDo Ultimate 2 controller in 2.4G D-Input mode via `IOHIDManager`.
+- **IMU Sensor Fusion**: Decodes 16-bit gyroscope (deg/s) and accelerometer ($g$), running a real-time complementary orientation filter ($\alpha = 0.98$) for roll, pitch, and yaw.
+- **Back Paddles**: Decodes physical paddles M1 and M2 from Byte 10.
+- **Rumble Feedback**: Dispatches 4-byte Output Report ID 5 directly to the physical rumble motors with variable intensity and duration.
 
-### 3. ⚡ Triggers & Button Switch Health
-- **Analog Trigger Precision Gauges**:
-  - Accurate float readouts (0.000 to 1.000) and percentages.
-  - Hair-trigger actuation threshold markers.
-  - Individual activation counters to detect faulty or sticking triggers.
-- **Switch Actuation Matrix**:
-  - Independent hit counters for every digital button on the controller.
-  - Actuation hold duration timers (in milliseconds) to diagnose switch bounce or chattering.
-  - One-click "Reset Counters" button.
+### 2. `DualSenseEmulationKit` (Swift Library Target)
+- Translates `EightBitDoState` to standard 64-byte Sony DualSense USB Input Reports (Report ID `0x01`).
+- **CoreHID / IOKit Virtual HID Device**: Presents an authentic Sony DualSense (VID `0x054C`, PID `0x0CE6`) to the macOS kernel without requiring third-party kexts or disabling SIP.
+- **Rumble Loopback**: Captures game force-feedback from DualSense Output Report ID `0x02` (Bytes 3 & 4) and feeds it back to the 8BitDo physical vibration motors.
+- **System Permissions**: Built-in helper checking and requesting macOS Accessibility (`AXIsProcessTrusted`) and Input Monitoring permissions.
 
-### 4. 🧭 Motion & Sensor Telemetry (IMU)
-- **3D Attitude Horizon**: Pitch, Roll, and Yaw visualization with an artificial horizon ball.
-- **Gyroscope**: Real-time angular velocity ($rad/s$) along X, Y, and Z axes.
-- **Accelerometer & Gravity Vector**: Instantaneous gravity vectors and user linear acceleration meters in $g$.
+---
 
-### 5. 📳 Unified Haptics & Vibration Suite
-- **Whole-Controller Rumble**: Synchronous vibration across all controller rumble motors (via direct macOS HID force-feedback and Apple CoreHaptics).
-- **Variable Controls**: Sliders for vibration Intensity (0–100%) and Sharpness / Frequency (0–100%).
-- **Preset Waveform Patterns**:
-  - *Single Tap* (Transient click)
-  - *Double Tap* (Double pulse)
-  - *Heartbeat* (Low-frequency thud rhythm)
-  - *Heavy Impact* (Intense rumble pulse)
-  - *Weapon Burst* (Rapid multi-strike vibration)
-  - *Continuous Buzz* (Sustained test)
-- Emergency Stop safety button.
+## App Features
 
-### 7. 📊 Input Event Stream & Polling Rate (Hz)
-- Real-time polling rate calculator measuring controller report frequency in Hertz (Hz).
-- Rolling stream of raw controller events with millisecond timestamps (`HH:mm:ss.SSS`).
-- Filter by category (*Buttons*, *Sticks*, *Triggers*, *D-Pad*, *Motion*, *System*).
-- Live substring search query filter.
-- Pause/Resume and one-click copy to system clipboard.
+### 1. 🎮 DualSense 5 (DS5) Emulation Tab
+- One-click Start / Stop Emulation toggle.
+- Real-time pipeline monitor showing packet frequency ($\sim 500\text{ Hz}$), total packets sent, and latency ($< 2.0\text{ ms}$).
+- System permission onboarding card with direct shortcuts to System Settings.
+- Quick presets: *Standard (M1=Touchpad)*, *Nintendo A/B Swap*, *Soulsborne*, and *FPS Pro (Hair Triggers)*.
 
-### 8. 🕹️ Virtual Demo Mode (No Controller Required)
-- Built-in controller simulation engine running at 60 Hz.
-- Performs automated Lissajous & orbital stick routines, trigger sweeps, and button presses.
-- Allows immediate verification of UI components, diagnostics, and metrics without requiring physical hardware.
-- Seamlessly transitions to physical controllers as soon as one is connected via USB or Bluetooth.
+### 2. 🎛️ Interactive Button & Paddle Remapping Tab
+- **Featured M1 & M2 Back Paddle Mapping**:
+  - Map Left Paddle (M1) to **PS5 Touchpad Click** to open maps/inventories in PlayStation-ported games (e.g. Valheim, Ghost of Tsushima, Elden Ring, Death Stranding).
+  - Map Right Paddle (M2) to **L3 (Sprint)** or any face/shoulder button.
+- **Button Remapping Matrix**: Remap any physical 8BitDo button (A, B, X, Y, LB, RB, LT, RT, L3, R3, Select, Start) to any DualSense target.
+- **Hair Trigger Mode**: Instant 100% digital trigger registration upon 5% pull for competitive shooters.
+- **Analog Deadzones**: Configurable deadzone sliders for Left Stick, Right Stick, and Triggers.
+- **6-Axis Gyro Aiming**: Sensitivity slider ($0.5\times$ to $3.0\times$), Yaw/Roll inversion, and Pitch inversion.
+- **Motor Scaling**: Slider for rumble intensity ($0\%$ to $200\%$).
+
+### 3. 🖥️ Background Mode & Menu Bar Controls
+- An `NSStatusItem` in the macOS menu bar gives instant access to:
+  - Controller connection status (`8BitDo Ultimate 2: Connected / Disconnected`).
+  - Emulation status (`DS5 Emulation: Active (500 Hz)`).
+  - Quick profile switcher.
+  - "Keep Running in Background on Close" toggle: Emulation continues smoothly in the background while you play your games.
+
+### 4. 🕹️ Comprehensive Controller Diagnostics
+- **Real-time Vector Visualizer**: Sub-millisecond interactive feedback for all buttons, triggers, sticks, and paddles.
+- **Circularity Benchmark**: 72-bin circular perimeter radar profiling outer gate deviation and stick drift.
+- **Switch Actuation Matrix**: Hit counter and hold-duration timer (ms) for every button switch.
+- **Motion Horizon**: 3D attitude horizon ball visualizing 6-axis gyro/accel orientation.
+- **Haptics Suite**: Multi-frequency vibration pattern generator.
+- **Virtual Demo Mode**: 60 Hz automated controller simulation when no physical hardware is plugged in.
 
 ---
 
 ## System Requirements
 
-- **macOS**: macOS 14.0 (Sonoma) or newer.
-- **Frameworks**: `GameController.framework`, `CoreHaptics.framework`, `SwiftUI`, `AppKit`.
-- **Architecture**: Apple Silicon (arm64) & Intel (x86_64).
+- **Operating System**: macOS 14.0 (Sonoma), macOS 15.0 (Sequoia), or macOS 26+.
+- **Permissions**: macOS Accessibility permission (required by macOS to register userspace virtual HID devices).
+- **Controller**: 8BitDo Ultimate 2 Wireless Controller in 2.4G D-Input mode (switch on back set to `D`).
 
 ---
 
-## How to Run & Build
+## Building & Running
 
-### Running directly from Terminal (Developer Mode)
+### Run the App in Development Mode
 ```bash
 swift run
 ```
 
-### Running Automated Test Suite
+### Run the Unit Test Suite
 ```bash
 swift test
 ```
 
-### Packaging into a Standalone `.app` Bundle
-To build a release binary and package it into `ControllerTester.app`:
+### Package the Native `.app` Bundle
+Run the packaging script to generate `ControllerTester.app`:
 ```bash
 ./scripts/build_app.sh
 ```
 
-Then launch the app:
+Launch the bundled application:
 ```bash
 open ControllerTester.app
 ```
 
 ---
 
-## Project Structure
+## License
 
-```
-controller/
-├── Package.swift                             # SPM Manifest (Swift 6 / macOS 14+)
-├── ControllerTester.app                      # Packaged native macOS App Bundle
-├── scripts/
-│   └── build_app.sh                          # App bundle packaging script
-├── Sources/
-│   └── ControllerTester/
-│       ├── ControllerTesterApp.swift         # @main App entry point & AppKit activation
-│       ├── Models/
-│       │   ├── ControllerManager.swift       # Apple GCController observer & lifecycle
-│       │   ├── GamepadState.swift            # Real-time state model & telemetry
-│       │   ├── DriftDiagnosticManager.swift  # Deadzone & 72-bin circularity diagnostics
-│       │   ├── HapticsManager.swift          # CoreHaptics engine & rumble patterns
-│       │   ├── LightManager.swift            # GCDeviceLight RGB lightbar controller
-│       │   ├── InputLogManager.swift         # Rolling event logger & category filters
-│       │   └── SimulatedController.swift     # 60Hz virtual controller demo engine
-│       └── Views/
-│           ├── MainView.swift                # NavigationSplitView shell & toolbar
-│           ├── GamepadOverviewView.swift     # Canvas visualizer & summary cards
-│           ├── DriftDiagnosticView.swift     # Stick radars & circularity test
-│           ├── TriggerButtonHealthView.swift # Analog triggers & switch hit counters
-│           ├── MotionSensorDetailView.swift  # 3D attitude horizon & gyro meters
-│           ├── HapticsLightbarView.swift     # Rumble vibration & RGB light controls
-│           └── Components/
-│               ├── GamepadCanvasView.swift   # Vector controller illustration
-│               ├── ThumbstickRadarView.swift # Polar coordinate radar
-│               ├── TriggerBarView.swift      # Gradient analog trigger meter
-│               ├── ButtonMatrixView.swift    # Button switch counters & durations
-│               ├── Motion3DView.swift        # Artificial horizon attitude sphere
-│               ├── HapticsTesterView.swift   # Motor locality & pattern triggers
-│               ├── LightbarControlView.swift # RGB presets & breathing mode
-│               └── InputLogView.swift        # Live stream table & polling gauge
-└── Tests/
-    └── ControllerTesterTests/
-        └── ControllerTesterTests.swift       # Unit tests for coordinates, math, & drift
-```
+MIT License. Designed for macOS gaming enthusiasts.

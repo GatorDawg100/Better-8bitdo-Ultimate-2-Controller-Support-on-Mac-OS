@@ -2,6 +2,8 @@ import SwiftUI
 import GameController
 
 public enum NavigationTab: String, CaseIterable, Identifiable {
+    case emulator = "DS5 Emulation"
+    case remapping = "Button Remapping"
     case overview = "Overview"
     case drift = "Sticks & Drift"
     case buttons = "Triggers & Buttons"
@@ -13,6 +15,8 @@ public enum NavigationTab: String, CaseIterable, Identifiable {
     
     public var icon: String {
         switch self {
+        case .emulator: return "cpu.fill"
+        case .remapping: return "slider.horizontal.3"
         case .overview: return "gamecontroller.fill"
         case .drift: return "circle.circle.fill"
         case .buttons: return "slider.horizontal.2"
@@ -80,6 +84,10 @@ public struct MainView: View {
             // Main Content Area
             Group {
                 switch selectedTab {
+                case .emulator:
+                    DS5EmulatorView()
+                case .remapping:
+                    RemappingView()
                 case .overview:
                     GamepadOverviewView(
                         state: manager.state,

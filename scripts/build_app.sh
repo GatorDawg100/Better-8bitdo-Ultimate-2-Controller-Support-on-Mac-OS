@@ -64,6 +64,8 @@ cat << 'EOF' > "${CONTENTS_DIR}/Info.plist"
             <string>DirectionalGamepad</string>
         </dict>
     </array>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Controller Tester needs input monitoring access to communicate with the 8BitDo Ultimate 2 controller in D-Input mode.</string>
 </dict>
 </plist>
 EOF

@@ -4,6 +4,8 @@ import GameController
 import SwiftUI
 import IOKit
 import IOKit.hid
+import EightBitDoKit
+import DualSenseEmulationKit
 
 private final class HIDBuffer: @unchecked Sendable {
     let pointer: UnsafeMutablePointer<UInt8> = .allocate(capacity: 64)
@@ -65,6 +67,7 @@ public final class ControllerManager: ObservableObject {
         GCController.shouldMonitorBackgroundEvents = true
         
         setupNotificationObservers()
+        setupEightBitDoSubscription()
         setupDirectHIDMotion()
         refreshControllers()
     }
@@ -91,12 +94,104 @@ public final class ControllerManager: ObservableObject {
             .store(in: &cancellables)
     }
     
+    private func setupEightBitDoSubscription() {
+        EightBitDoDevice.shared.start()
+        
+        EightBitDoDevice.shared.onStateChanged = { [weak self] ebState in
+            Task { @MainActor [weak self] in
+                self?.handleEightBitDoState(ebState)
+            }
+        }
+        
+        EightBitDoDevice.shared.$isConnected
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isConnected in
+                guard let self = self else { return }
+                if isConnected && (self.selectedController == nil || self.isSimulatedMode) {
+                    self.isSimulatedMode = false
+                    self.state.isConnected = true
+                    self.state.isSimulated = false
+                    self.state.vendorName = "8BitDo Ultimate 2 (Native D-Input)"
+                    self.state.productCategory = "2.4G Wireless D-Input"
+                    self.state.isHidPCMode = true
+                    self.state.hardwareAdvisory = nil
+                    self.state.motion.hasMotion = true
+                    self.state.hasHaptics = true
+                }
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func handleEightBitDoState(_ ebState: EightBitDoState) {
+        guard !isSimulatedMode else { return }
+        
+        // 1. Back Paddles (M1 & M2)
+        state.paddle1.update(pressed: ebState.paddleM1, value: ebState.paddleM1 ? 1.0 : 0.0)
+        state.paddle2.update(pressed: ebState.paddleM2, value: ebState.paddleM2 ? 1.0 : 0.0)
+        
+        // 2. Motion IMU Attitude & Rates
+        state.motion = ControllerMotionState(
+            hasMotion: true,
+            pitch: Double(ebState.pitch) * .pi / 180.0,
+            roll: Double(ebState.roll) * .pi / 180.0,
+            yaw: Double(ebState.yaw) * .pi / 180.0,
+            rotationRateX: Double(ebState.angularVelocityDeg.x),
+            rotationRateY: Double(ebState.angularVelocityDeg.y),
+            rotationRateZ: Double(ebState.angularVelocityDeg.z),
+            gravityX: Double(ebState.acceleration.x),
+            gravityY: Double(ebState.acceleration.y),
+            gravityZ: Double(ebState.acceleration.z),
+            userAccelX: 0.0,
+            userAccelY: 0.0,
+            userAccelZ: 0.0
+        )
+        
+        // 3. If no Apple GCController is active, drive full gamepad state from EightBitDoKit
+        if selectedController == nil {
+            state.buttonA.update(pressed: ebState.buttonA, value: ebState.buttonA ? 1.0 : 0.0)
+            state.buttonB.update(pressed: ebState.buttonB, value: ebState.buttonB ? 1.0 : 0.0)
+            state.buttonX.update(pressed: ebState.buttonX, value: ebState.buttonX ? 1.0 : 0.0)
+            state.buttonY.update(pressed: ebState.buttonY, value: ebState.buttonY ? 1.0 : 0.0)
+            
+            state.leftShoulder.update(pressed: ebState.buttonLB, value: ebState.buttonLB ? 1.0 : 0.0)
+            state.rightShoulder.update(pressed: ebState.buttonRB, value: ebState.buttonRB ? 1.0 : 0.0)
+            state.leftTrigger.update(pressed: ebState.leftTrigger > 0.05, value: ebState.leftTrigger)
+            state.rightTrigger.update(pressed: ebState.rightTrigger > 0.05, value: ebState.rightTrigger)
+            
+            state.dpadUp.update(pressed: ebState.dpadUp, value: ebState.dpadUp ? 1.0 : 0.0)
+            state.dpadDown.update(pressed: ebState.dpadDown, value: ebState.dpadDown ? 1.0 : 0.0)
+            state.dpadLeft.update(pressed: ebState.dpadLeft, value: ebState.dpadLeft ? 1.0 : 0.0)
+            state.dpadRight.update(pressed: ebState.dpadRight, value: ebState.dpadRight ? 1.0 : 0.0)
+            
+            state.leftStick = ThumbstickState(x: Float(ebState.leftStick.x), y: Float(ebState.leftStick.y))
+            state.rightStick = ThumbstickState(x: Float(ebState.rightStick.x), y: Float(ebState.rightStick.y))
+            state.leftStickButton.update(pressed: ebState.buttonL3, value: ebState.buttonL3 ? 1.0 : 0.0)
+            state.rightStickButton.update(pressed: ebState.buttonR3, value: ebState.buttonR3 ? 1.0 : 0.0)
+            
+            state.buttonMenu.update(pressed: ebState.buttonStart, value: ebState.buttonStart ? 1.0 : 0.0)
+            state.buttonOptions.update(pressed: ebState.buttonSelect, value: ebState.buttonSelect ? 1.0 : 0.0)
+            state.buttonHome.update(pressed: ebState.buttonHome, value: ebState.buttonHome ? 1.0 : 0.0)
+            
+            state.recordEvent()
+        }
+    }
+    
     public func refreshControllers() {
         let currentList = GCController.controllers()
         self.connectedControllers = currentList
         
         if let first = currentList.first {
             selectController(first)
+        } else if EightBitDoDevice.shared.isConnected {
+            self.isSimulatedMode = false
+            self.state.isConnected = true
+            self.state.isSimulated = false
+            self.state.vendorName = "8BitDo Ultimate 2 (Native D-Input)"
+            self.state.productCategory = "2.4G Wireless D-Input"
+            self.state.isHidPCMode = true
+            self.state.hardwareAdvisory = nil
+            self.state.motion.hasMotion = true
+            self.state.hasHaptics = true
         } else {
             // No physical controllers connected - fallback to simulated mode
             setSimulatedMode(true)

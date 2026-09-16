@@ -1,6 +1,4 @@
-// swift-tools-version: 6.4
-// The swift-tools-version declares the minimum version of Swift required to build this package.
-
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
@@ -8,13 +6,39 @@ let package = Package(
     platforms: [
         .macOS(.v14)
     ],
+    products: [
+        .library(
+            name: "EightBitDoKit",
+            targets: ["EightBitDoKit"]
+        ),
+        .library(
+            name: "DualSenseEmulationKit",
+            targets: ["DualSenseEmulationKit"]
+        ),
+        .executable(
+            name: "ControllerTester",
+            targets: ["ControllerTester"]
+        )
+    ],
     targets: [
+        .target(
+            name: "EightBitDoKit",
+            dependencies: [],
+            path: "Sources/EightBitDoKit"
+        ),
+        .target(
+            name: "DualSenseEmulationKit",
+            dependencies: ["EightBitDoKit"],
+            path: "Sources/DualSenseEmulationKit"
+        ),
         .executableTarget(
-            name: "ControllerTester"
+            name: "ControllerTester",
+            dependencies: ["EightBitDoKit", "DualSenseEmulationKit"],
+            path: "Sources/ControllerTester"
         ),
         .testTarget(
             name: "ControllerTesterTests",
-            dependencies: ["ControllerTester"]
+            dependencies: ["ControllerTester", "EightBitDoKit", "DualSenseEmulationKit"]
         ),
     ]
 )
