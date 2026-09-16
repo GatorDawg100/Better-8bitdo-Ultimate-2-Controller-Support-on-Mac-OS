@@ -13,20 +13,56 @@ namespace EightBitDoUltimate2Valheim
     {
         private void Awake()
         {
-            Logger.LogInfo("[8BitDo] Initializing 8BitDo Ultimate 2 Wireless D-Input driver for Valheim macOS...");
+            Logger.LogInfo("[8BitDo] Initializing 8BitDo Ultimate 2 Wireless driver (Bluetooth & 2.4G Dongle) for Valheim macOS...");
             RegisterLayout();
-            Logger.LogInfo("[8BitDo] Successfully registered custom Gamepad layout (VID: 0x2DC8, PID: 0x6012).");
+
+            InputSystem.onDeviceChange += (device, change) =>
+            {
+                if (change == InputDeviceChange.Added || change == InputDeviceChange.Reconnected)
+                {
+                    Logger.LogInfo($"[8BitDo] Device connected: {device.displayName} (Product: {device.description.product}, Interface: {device.description.interfaceName})");
+                }
+            };
+
+            Logger.LogInfo("[8BitDo] Successfully registered Gamepad layouts for Bluetooth and 2.4GHz Dongle.");
         }
 
         private static void RegisterLayout()
         {
-            // Register custom layout for 8BitDo Ultimate 2 in 2.4G D-Input mode (VID 0x2DC8, PID 0x6012)
+            // Primary Matcher: VID 0x2DC8, PID 0x6012 with HID interface (2.4G Dongle & Bluetooth)
             InputSystem.RegisterLayout<EightBitDoUltimate2Gamepad>(
                 "8BitDoUltimate2Wireless",
                 matches: new InputDeviceMatcher()
                     .WithInterface("HID")
                     .WithCapability("vendorId", 0x2dc8)
                     .WithCapability("productId", 0x6012)
+            );
+
+            // Matcher without interface requirement (covers generic macOS Bluetooth HID stacks)
+            InputSystem.RegisterLayoutMatcher(
+                "8BitDoUltimate2Wireless",
+                new InputDeviceMatcher()
+                    .WithCapability("vendorId", 0x2dc8)
+                    .WithCapability("productId", 0x6012)
+            );
+
+            // Matcher by Bluetooth Product Name (as reported by macOS Bluetooth stack)
+            InputSystem.RegisterLayoutMatcher(
+                "8BitDoUltimate2Wireless",
+                new InputDeviceMatcher()
+                    .WithProduct("8BitDo Ultimate 2 Wireless")
+            );
+
+            InputSystem.RegisterLayoutMatcher(
+                "8BitDoUltimate2Wireless",
+                new InputDeviceMatcher()
+                    .WithProduct("8BitDo Ultimate 2")
+            );
+
+            InputSystem.RegisterLayoutMatcher(
+                "8BitDoUltimate2Wireless",
+                new InputDeviceMatcher()
+                    .WithManufacturer("8BitDo")
             );
         }
     }
@@ -36,10 +72,15 @@ namespace EightBitDoUltimate2Valheim
     {
         static EightBitDoUltimate2Gamepad()
         {
+            // Ensure static registration runs before scene load
+            RegisterLayoutFallback();
+        }
+
+        private static void RegisterLayoutFallback()
+        {
             InputSystem.RegisterLayout<EightBitDoUltimate2Gamepad>(
                 "8BitDoUltimate2Wireless",
                 matches: new InputDeviceMatcher()
-                    .WithInterface("HID")
                     .WithCapability("vendorId", 0x2dc8)
                     .WithCapability("productId", 0x6012)
             );

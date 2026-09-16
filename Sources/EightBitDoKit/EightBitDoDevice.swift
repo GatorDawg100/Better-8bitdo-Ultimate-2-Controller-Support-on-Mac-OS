@@ -168,12 +168,14 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         for dev in deviceSet {
             let vid = getIntProperty(device: dev, key: kIOHIDVendorIDKey)
             let pid = getIntProperty(device: dev, key: kIOHIDProductIDKey)
+            let name = getStringProperty(device: dev, key: kIOHIDProductKey) ?? ""
             
-            if vid == EightBitDoConstants.vendorID {
-                if EightBitDoConstants.supportedProductIDs.contains(pid) || pid == 0 {
-                    attachDevice(dev)
-                    break
-                }
+            let isVendorMatch = (vid == EightBitDoConstants.vendorID) && (EightBitDoConstants.supportedProductIDs.contains(pid) || pid == 0)
+            let isNameMatch = name.contains("8BitDo") && (name.contains("Ultimate") || name.contains("Wireless"))
+            
+            if isVendorMatch || isNameMatch {
+                attachDevice(dev)
+                break
             }
         }
     }
