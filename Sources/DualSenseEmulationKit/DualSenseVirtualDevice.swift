@@ -7,15 +7,18 @@ import CoreHID
 
 public enum DualSenseVirtualDeviceError: LocalizedError {
     case accessibilityDenied
+    case missingEntitlement(String)
     case deviceCreationFailed
     case dispatchFailed(String)
     
     public var errorDescription: String? {
         switch self {
         case .accessibilityDenied:
-            return "Accessibility permission is required by macOS to create virtual controllers. Please enable it in System Settings > Privacy & Security > Accessibility."
+            return "Accessibility permission is required by macOS. Please enable it in System Settings > Privacy & Security > Accessibility."
+        case .missingEntitlement(let details):
+            return "macOS restricted virtual HID creation: Apple requires the 'com.apple.developer.hid.virtual.device' entitlement from the Apple Developer Program. (\(details))"
         case .deviceCreationFailed:
-            return "Failed to instantiate virtual DualSense HID device. Ensure the app has Accessibility permissions and restart."
+            return "macOS kernel blocked virtual DualSense creation (kIOReturnNotPermitted 0xe00002c2). Apple restricts virtual gamepads behind the Apple Developer entitlement 'com.apple.developer.hid.virtual.device'. Standard Accessibility/Input Monitoring permissions cannot bypass this kernel security policy."
         case .dispatchFailed(let reason):
             return "Failed to dispatch input report to virtual DualSense: \(reason)"
         }

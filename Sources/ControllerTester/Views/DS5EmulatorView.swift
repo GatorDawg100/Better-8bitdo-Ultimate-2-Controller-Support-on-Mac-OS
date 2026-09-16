@@ -22,6 +22,11 @@ public struct DS5EmulatorView: View {
                     permissionWarningCard
                 }
                 
+                // Entitlement / Kernel diagnostic card
+                if emulator.lastErrorMessage != nil {
+                    kernelEntitlementInfoCard
+                }
+                
                 // 3. Live Hardware Pipeline Diagram
                 pipelineDiagramCard
                 
@@ -170,6 +175,82 @@ public struct DS5EmulatorView: View {
         }
         .padding(16)
         .background(Color.orange.opacity(0.12))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+        )
+    }
+    
+    // MARK: - Kernel Entitlement Info Card
+    
+    private var kernelEntitlementInfoCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .font(.title)
+                    .foregroundColor(.orange)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("macOS Kernel Security Notice (kIOReturnNotPermitted)")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    
+                    Text("Virtual HID device creation requires the private Apple Developer entitlement 'com.apple.developer.hid.virtual.device'. Standard Accessibility and Input Monitoring permissions do not grant this kernel capability.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Divider()
+            
+            Text("Recommended Working Solutions for Games:")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Valheim (Unity) - Native 8BitDo BepInEx Plugin")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Text("Directly maps the 8BitDo in 2.4G D-Input mode with full analog triggers and zero latency. Built & installed in Valheim/BepInEx/plugins/EightBitDoUltimate2/.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Steam & SDL2 / SDL3 Games")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Text("Run './scripts/setup_sdl_controller.sh' to configure SDL_GAMECONTROLLERCONFIG for automatic native recognition in Steam and SDL games.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "key.fill")
+                        .foregroundColor(.blue)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Apple Developer Signing (For DS5 Virtual Gamepad)")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Text("To enable system-wide virtual DualSense emulation, sign the app with an Apple Developer provisioning profile granting 'com.apple.developer.hid.virtual.device'.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.orange.opacity(0.1))
         .cornerRadius(12)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
