@@ -91,7 +91,11 @@ public final class MenuBarManager: NSObject {
     
     @objc private func showMainWindowAction() {
         NSApplication.shared.activate(ignoringOtherApps: true)
-        if let win = window ?? NSApplication.shared.windows.first {
+        let targetWindow = window ?? NSApplication.shared.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey })
+        if let win = targetWindow {
+            if win.isMiniaturized {
+                win.deminiaturize(nil)
+            }
             win.makeKeyAndOrderFront(nil)
             win.orderFrontRegardless()
         }

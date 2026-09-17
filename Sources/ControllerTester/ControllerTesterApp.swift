@@ -1,7 +1,16 @@
 import SwiftUI
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    public static weak var shared: AppDelegate?
+    public weak var mainWindow: NSWindow?
+    
+    override init() {
+        super.init()
+        AppDelegate.shared = self
+    }
+    
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -12,20 +21,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        let runInBackground = UserDefaults.standard.object(forKey: "run_in_background") as? Bool ?? true
-        if runInBackground {
-            return false
+        return false
+    }
+    
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let targetWindow = mainWindow ?? sender.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey })
+        if let window = targetWindow {
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
         }
         return true
     }
     
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            if let window = sender.windows.first {
-                window.makeKeyAndOrderFront(self)
-            }
-        }
-        return true
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
     }
 }
 
@@ -53,6 +67,8 @@ struct WindowAccessor: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             if let window = view.window {
+                AppDelegate.shared?.mainWindow = window
+                window.delegate = AppDelegate.shared
                 MenuBarManager.shared.setWindow(window)
             }
         }
