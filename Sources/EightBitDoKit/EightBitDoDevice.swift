@@ -18,6 +18,60 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
     public var onConnectionChanged: (@Sendable (Bool) -> Void)?
     public var onRawReportReceived: (@Sendable (Data) -> Void)?
     
+    // Modern Swift Concurrency AsyncStreams
+    private var stateContinuations: [UUID: AsyncStream<EightBitDoState>.Continuation] = [:]
+    private var connectionContinuations: [UUID: AsyncStream<Bool>.Continuation] = [:]
+    
+    /// Asynchronous stream of incoming controller state updates (500 Hz).
+    /// Can be consumed directly using `for await state in device.states`.
+    public var states: AsyncStream<EightBitDoState> {
+        AsyncStream { continuation in
+            let id = UUID()
+            self.lock.lock()
+            self.stateContinuations[id] = continuation
+            self.lock.unlock()
+            
+            continuation.onTermination = { [weak self] _ in
+                guard let self = self else { return }
+                self.lock.lock()
+                self.stateContinuations.removeValue(forKey: id)
+                self.lock.unlock()
+            }
+        }
+    }
+    
+    /// Asynchronous stream of controller connection state changes.
+    /// Yields the current connection state immediately upon subscription.
+    public var connections: AsyncStream<Bool> {
+        AsyncStream { continuation in
+            let id = UUID()
+            self.lock.lock()
+            self.connectionContinuations[id] = continuation
+            let currentConnection = self.device != nil
+            self.lock.unlock()
+            
+            continuation.yield(currentConnection)
+            
+            continuation.onTermination = { [weak self] _ in
+                guard let self = self else { return }
+                self.lock.lock()
+                self.connectionContinuations.removeValue(forKey: id)
+                self.lock.unlock()
+            }
+        }
+    }
+    
+    /// Packet decoder and IMU sensor fusion configuration
+    public var configuration: EightBitDoPacketDecoder.Configuration {
+        get { decoder.configuration }
+        set { decoder.configuration = newValue }
+    }
+    
+    /// Current estimated stationary zero-rate gyroscope bias in deg/s (X, Y, Z).
+    public var gyroBiasDeg: SIMD3<Float> {
+        decoder.currentGyroBiasDeg
+    }
+    
     // Internal IOKit state
     private var manager: IOHIDManager?
     private var device: IOHIDDevice?
@@ -56,6 +110,15 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         scanTimer = nil
         
         lock.lock()
+        for c in stateContinuations.values {
+            c.finish()
+        }
+        stateContinuations.removeAll()
+        for c in connectionContinuations.values {
+            c.finish()
+        }
+        connectionContinuations.removeAll()
+        
         if let dev = device {
             if let buf = reportBuffer {
                 IOHIDDeviceRegisterInputReportCallback(dev, buf, 64, nil, nil)
@@ -74,8 +137,24 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         }
     }
     
+    /// Resets the estimated attitude and accumulated yaw to zero.
     public func resetOrientation() {
         decoder.resetOrientation()
+    }
+    
+    /// Resets the estimated attitude to specific pitch, roll, and yaw angles.
+    public func resetOrientation(pitch: Float = 0, roll: Float = 0, yaw: Float = 0) {
+        decoder.resetOrientation(pitch: pitch, roll: roll, yaw: yaw)
+    }
+    
+    /// Resets the stationary gyroscope zero-rate bias estimation.
+    public func resetGyroBias() {
+        decoder.resetGyroBias()
+    }
+    
+    /// Sets a manual zero-rate gyro drift bias offset in deg/s.
+    public func setGyroBias(deg: SIMD3<Float>) {
+        decoder.setGyroBias(deg: deg)
     }
     
     /// Issues a force-feedback rumble report to the controller motors.
@@ -88,11 +167,24 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         sendRumbleMotors(heavy: heavy, light: light)
     }
     
+    /// Issues a force-feedback rumble report for `duration` seconds via a dispatch timer.
     public func sendRumble(lowFrequency: Float, highFrequency: Float, duration: TimeInterval) {
         sendRumble(lowFrequency: lowFrequency, highFrequency: highFrequency)
         queue.asyncAfter(deadline: .now() + duration) { [weak self] in
             self?.stopRumble()
         }
+    }
+    
+    /// Asynchronously activates the rumble motors for `duration` seconds and suspends until finished.
+    /// Automatically stops the rumble if the task is cancelled or duration expires.
+    public func sendRumble(lowFrequency: Float, highFrequency: Float, duration: TimeInterval) async {
+        sendRumble(lowFrequency: lowFrequency, highFrequency: highFrequency)
+        do {
+            try await Task.sleep(nanoseconds: UInt64(max(0, duration) * 1_000_000_000))
+        } catch {
+            // Task cancelled early
+        }
+        stopRumble()
     }
     
     public func stopRumble() {
@@ -246,6 +338,13 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         
         let name = getStringProperty(device: dev, key: kIOHIDProductKey) ?? "8BitDo Ultimate 2 Wireless"
         
+        lock.lock()
+        let connContinuations = Array(connectionContinuations.values)
+        lock.unlock()
+        for c in connContinuations {
+            c.yield(true)
+        }
+        
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.deviceName = name
@@ -262,7 +361,12 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
             return
         }
         device = nil
+        let connContinuations = Array(connectionContinuations.values)
         lock.unlock()
+        
+        for c in connContinuations {
+            c.yield(false)
+        }
         
         IOHIDDeviceUnscheduleFromRunLoop(dev, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         if let buf = reportBuffer {
@@ -299,6 +403,13 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         
         onRawReportReceived?(data)
         onStateChanged?(newState)
+        
+        lock.lock()
+        let continuations = Array(stateContinuations.values)
+        lock.unlock()
+        for c in continuations {
+            c.yield(newState)
+        }
         
         DispatchQueue.main.async { [weak self] in
             self?.state = newState

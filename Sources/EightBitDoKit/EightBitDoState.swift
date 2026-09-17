@@ -125,7 +125,7 @@ public struct EightBitDoState: Equatable, Sendable {
     }
     
     /// Query whether a specific EightBitDoButton is currently active
-    public func isPressed(_ button: EightBitDoButton) -> Bool {
+    public func isPressed(_ button: EightBitDoButton, triggerThreshold: Float = 0.3) -> Bool {
         switch button {
         case .a: return buttonA
         case .b: return buttonB
@@ -133,8 +133,8 @@ public struct EightBitDoState: Equatable, Sendable {
         case .y: return buttonY
         case .lb: return buttonLB
         case .rb: return buttonRB
-        case .lt: return leftTrigger > 0.3
-        case .rt: return rightTrigger > 0.3
+        case .lt: return leftTrigger > triggerThreshold
+        case .rt: return rightTrigger > triggerThreshold
         case .l3: return buttonL3
         case .r3: return buttonR3
         case .select: return buttonSelect
@@ -149,5 +149,117 @@ public struct EightBitDoState: Equatable, Sendable {
         case .l4: return buttonL4
         case .r4: return buttonR4
         }
+    }
+    
+    /// Array of all buttons currently in an active / pressed state
+    public var pressedButtons: [EightBitDoButton] {
+        EightBitDoButton.allCases.filter { isPressed($0) }
+    }
+    
+    /// Returns true if any physical button, bumper, trigger, paddle, or D-pad direction is pressed
+    public var isAnyButtonPressed: Bool {
+        buttonA || buttonB || buttonX || buttonY ||
+        buttonLB || buttonRB || buttonL4 || buttonR4 ||
+        buttonL3 || buttonR3 || buttonSelect || buttonStart || buttonHome ||
+        dpadUp || dpadDown || dpadLeft || dpadRight ||
+        paddleM1 || paddleM2 || leftTrigger > 0.3 || rightTrigger > 0.3
+    }
+    
+    // MARK: - Thumbstick Polar & Deadzone Calculations
+    
+    /// Radial magnitude of the left stick (0.0 at center, up to ~1.0 at outer rim)
+    public var leftStickMagnitude: Float {
+        Float(hypot(leftStick.x, leftStick.y))
+    }
+    
+    /// Radial magnitude of the right stick (0.0 at center, up to ~1.0 at outer rim)
+    public var rightStickMagnitude: Float {
+        Float(hypot(rightStick.x, rightStick.y))
+    }
+    
+    /// Angle of the left stick in degrees (0° = East/Right, 90° = North/Up, 180° = West/Left, 270° = South/Down)
+    public var leftStickAngleDegrees: Float {
+        let dx = Float(leftStick.x)
+        let dy = Float(leftStick.y)
+        guard hypot(dx, dy) >= 0.001 else { return 0.0 }
+        var angle = atan2(dy, dx) * (180.0 / .pi)
+        if angle < 0 { angle += 360.0 }
+        return angle
+    }
+    
+    /// Angle of the right stick in degrees (0° = East/Right, 90° = North/Up, 180° = West/Left, 270° = South/Down)
+    public var rightStickAngleDegrees: Float {
+        let dx = Float(rightStick.x)
+        let dy = Float(rightStick.y)
+        guard hypot(dx, dy) >= 0.001 else { return 0.0 }
+        var angle = atan2(dy, dx) * (180.0 / .pi)
+        if angle < 0 { angle += 360.0 }
+        return angle
+    }
+    
+    /// Angle of the left stick in radians (0 to 2π)
+    public var leftStickAngleRadians: Float {
+        let dx = Float(leftStick.x)
+        let dy = Float(leftStick.y)
+        guard hypot(dx, dy) >= 0.001 else { return 0.0 }
+        var angle = atan2(dy, dx)
+        if angle < 0 { angle += 2.0 * .pi }
+        return angle
+    }
+    
+    /// Angle of the right stick in radians (0 to 2π)
+    public var rightStickAngleRadians: Float {
+        let dx = Float(rightStick.x)
+        let dy = Float(rightStick.y)
+        guard hypot(dx, dy) >= 0.001 else { return 0.0 }
+        var angle = atan2(dy, dx)
+        if angle < 0 { angle += 2.0 * .pi }
+        return angle
+    }
+    
+    /// Returns the left stick vector with a radial deadzone applied.
+    /// Deflections below `deadzone` return `CGPoint.zero`. Deflections above are smoothly remapped from 0.0 to 1.0.
+    public func leftStickWithDeadzone(_ deadzone: Float = 0.08) -> CGPoint {
+        Self.applyRadialDeadzone(stick: leftStick, deadzone: deadzone)
+    }
+    
+    /// Returns the right stick vector with a radial deadzone applied.
+    /// Deflections below `deadzone` return `CGPoint.zero`. Deflections above are smoothly remapped from 0.0 to 1.0.
+    public func rightStickWithDeadzone(_ deadzone: Float = 0.08) -> CGPoint {
+        Self.applyRadialDeadzone(stick: rightStick, deadzone: deadzone)
+    }
+    
+    private static func applyRadialDeadzone(stick: CGPoint, deadzone: Float) -> CGPoint {
+        let dx = Float(stick.x)
+        let dy = Float(stick.y)
+        let mag = hypot(dx, dy)
+        guard mag > deadzone else { return .zero }
+        let normalizedMag = (mag - deadzone) / (1.0 - deadzone)
+        let clampedMag = min(1.0, max(0.0, normalizedMag))
+        let factor = CGFloat(clampedMag / mag)
+        return CGPoint(x: stick.x * factor, y: stick.y * factor)
+    }
+    
+    // MARK: - Motion Diagnostics
+    
+    /// Total acceleration vector magnitude in g
+    public var totalAcceleration: Float {
+        simd_length(acceleration)
+    }
+    
+    /// Total angular rate magnitude in deg/s
+    public var totalAngularVelocityDeg: Float {
+        simd_length(angularVelocityDeg)
+    }
+    
+    /// Whether the controller is resting stationary on a surface
+    public var isResting: Bool {
+        abs(totalAcceleration - 1.0) < 0.1 && totalAngularVelocityDeg < 2.0
+    }
+}
+
+extension EightBitDoState: CustomStringConvertible {
+    public var description: String {
+        "EightBitDoState(LX: \(String(format: "%.2f", leftStick.x)), LY: \(String(format: "%.2f", leftStick.y)), LT: \(String(format: "%.2f", leftTrigger)), RT: \(String(format: "%.2f", rightTrigger)), Pitch: \(String(format: "%.1f°", pitch)), Roll: \(String(format: "%.1f°", roll)), Yaw: \(String(format: "%.1f°", yaw)))"
     }
 }

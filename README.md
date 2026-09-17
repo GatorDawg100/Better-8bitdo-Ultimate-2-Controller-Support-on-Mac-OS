@@ -33,8 +33,10 @@ When connecting the **8BitDo Ultimate 2 Wireless Controller** to a Mac in 2.4G D
 │                        EightBitDoKit                         │
 │ • IOHIDManager userspace driver (dedicated high-priority Q)  │
 │ • Sub-millisecond thumbstick & linear analog trigger parsing │
-│ • Physical Back Paddles (M1 & M2) decoded from Byte 10       │
-│ • 6-Axis IMU complementary orientation filter (α = 0.98)     │
+│ • Hardware Back Paddles (M1 & M2) decoded from Byte 8        │
+│ • Extra Top Bumpers (L4 & R4) decoded from Byte 10           │
+│ • 6-Axis IMU sensor fusion (α = 0.94) + auto-zero drift bias │
+│ • Modern Swift 6 Concurrency (AsyncStream / async rumble)    │
 │ • Direct Output Report ID 5 force-feedback rumble dispatcher │
 └──────────────────────────────┬───────────────────────────────┘
                                │ EightBitDoState
@@ -46,10 +48,49 @@ When connecting the **8BitDo Ultimate 2 Wireless Controller** to a Mac in 2.4G D
 ```
 
 * **500 Hz High-Speed Polling**: Reads sub-millisecond state updates without driver overhead.
-* **Full 6-Axis IMU Sensor Fusion**: Decodes real-time angular velocity (deg/s), acceleration ($g$), gravity vector, and filtered attitude (pitch, roll, yaw).
-* **Hardware Back Paddles (M1 & M2)**: Decodes the physical grip paddles directly from byte 10.
+* **Full 6-Axis IMU Sensor Fusion**: Decodes real-time angular velocity (deg/s), acceleration ($g$), gravity vector, and filtered attitude (pitch, roll, yaw) with stationary zero-rate drift cancellation.
+* **Hardware Back Paddles (M1 & M2)**: Decodes the physical rear grip paddles directly from byte 8.
+* **Extra Top Bumpers (L4 & R4)**: Decodes the physical extra bumper buttons directly from byte 10.
 * **Full Linear Analog Triggers**: True 8-bit analog resolution ($0.0$ to $1.0$).
 * **Direct Rumble Motor Output**: Sends raw Output Report ID 5 packets to drive the heavy and light rumble motors.
+* **Swift Concurrency First**: Native `device.states` and `device.connections` `AsyncStream` support alongside Combine and callbacks.
+
+---
+
+## Hardware HID Protocol Specification
+
+The 8BitDo Ultimate 2 Wireless Controller exchanges 34-byte input reports (Report ID `0x01`) and 4-byte vibration output reports (Report ID `0x05`) over USB HID:
+
+### Input Report 1 (34 Bytes)
+
+| Byte Offset | Payload Field | Data Type / Bits | Description |
+|:---|:---|:---|:---|
+| **0** | Report ID | `UInt8` | Constant `0x01` |
+| **1** | D-Pad Hat Switch | `4-bit nibble` | `0` = Up, `1` = Up-Right, `2` = Right, `3` = Down-Right, `4` = Down, `5` = Down-Left, `6` = Left, `7` = Up-Left, `15` = Neutral |
+| **2** | Left Stick X | `UInt8` | $0$ (Full Left) ... $128$ (Center) ... $255$ (Full Right) |
+| **3** | Left Stick Y | `UInt8` | $0$ (Full Up, inverted) ... $128$ (Center) ... $255$ (Full Down) |
+| **4** | Right Stick X | `UInt8` | $0$ (Full Left) ... $128$ (Center) ... $255$ (Full Right) |
+| **5** | Right Stick Y | `UInt8` | $0$ (Full Up, inverted) ... $128$ (Center) ... $255$ (Full Down) |
+| **6** | Left Trigger (LT) | `UInt8` | $0$ (Released) to $255$ (Fully Pressed) Linear Analog |
+| **7** | Right Trigger (RT) | `UInt8` | $0$ (Released) to $255$ (Fully Pressed) Linear Analog |
+| **8** | Buttons, Bumpers & Paddles | Bitmask | **Bit 0**: `A`<br>**Bit 1**: `B`<br>**Bit 2**: **Paddle M2** (Right Rear)<br>**Bit 3**: `X`<br>**Bit 4**: `Y`<br>**Bit 5**: **Paddle M1** (Left Rear)<br>**Bit 6**: `LB`<br>**Bit 7**: `RB` |
+| **9** | System Navigation & Clicks | Bitmask | **Bit 2**: `Select` / Back<br>**Bit 3**: `Start`<br>**Bit 4**: `Home` / Guide (unintercepted by macOS)<br>**Bit 5**: `L3` (Left Thumbstick Click)<br>**Bit 6**: `R3` (Right Thumbstick Click) |
+| **10** | Extra Bumpers | Bitmask | **Bit 0**: **Bumper L4** (Left Extra)<br>**Bit 1**: **Bumper R4** (Right Extra) |
+| **15..16** | Accelerometer X | `Int16` (LE) | Signed 16-bit linear acceleration (~4096 LSB per 1.0g) |
+| **17..18** | Accelerometer Y | `Int16` (LE) | Signed 16-bit linear acceleration (~4096 LSB per 1.0g) |
+| **19..20** | Accelerometer Z | `Int16` (LE) | Signed 16-bit linear acceleration (~4096 LSB per 1.0g) |
+| **21..22** | Gyroscope X | `Int16` (LE) | Signed 16-bit angular velocity (~16.384 LSB per deg/s) |
+| **23..24** | Gyroscope Y | `Int16` (LE) | Signed 16-bit angular velocity (~16.384 LSB per deg/s) |
+| **25..26** | Gyroscope Z | `Int16` (LE) | Signed 16-bit angular velocity (~16.384 LSB per deg/s) |
+
+### Output Report 5 (4 Bytes Force-Feedback Rumble)
+
+| Byte Offset | Target Motor | Value Range |
+|:---|:---|:---|
+| **0** | Heavy Low-Frequency Actuator | `0` (Off) to `100` (100% Intensity) |
+| **1** | Light High-Frequency Actuator | `0` (Off) to `100` (100% Intensity) |
+| **2** | Heavy Motor Duplicate | `0` to `100` |
+| **3** | Light Motor Duplicate | `0` to `100` |
 
 ---
 
@@ -68,7 +109,7 @@ When connecting the **8BitDo Ultimate 2 Wireless Controller** to a Mac in 2.4G D
 * **🧭 Motion & Sensors**:
   * 3D Artificial Horizon ball reflecting real-time pitch, roll, and yaw.
   * Angular velocity dials (deg/s) and gravity acceleration meters.
-  * One-click orientation recalibration.
+  * One-click orientation recalibration and stationary zero-rate drift compensation.
 * **📳 Haptics**:
   * Dual-motor rumble testing (low-frequency heavy motor and high-frequency light motor).
   * Preset waveform patterns (Heartbeat, Pulse, Rumble Wave) and emergency stop.
@@ -97,89 +138,110 @@ targets: [
 ]
 ```
 
-### Swift Usage Example
+### 1. Modern Swift Concurrency (`AsyncStream` & `async`)
 
 ```swift
 import EightBitDoKit
-import Combine
 
-// 1. Initialize and start the driver
 let device = EightBitDoDevice.shared
 device.start()
 
-// 2. Observe connection lifecycle
+// Stream incoming controller state updates asynchronously (500 Hz)
+Task {
+    for await state in device.states {
+        // Stick deflections and polar calculations
+        let mag = state.leftStickMagnitude       // 0.0 ... 1.0
+        let deg = state.leftStickAngleDegrees     // 0° ... 360°
+        let stick = state.leftStickWithDeadzone(0.08) // radial deadzone remapped
+        
+        // Analog linear triggers (0.0 ... 1.0)
+        let lt = state.leftTrigger
+        let rt = state.rightTrigger
+        
+        // Active buttons
+        if state.paddleM1 { print("Paddle M1 active") }
+        if state.paddleM2 { print("Paddle M2 active") }
+        if state.buttonL4 { print("Extra bumper L4 active") }
+        if state.buttonR4 { print("Extra bumper R4 active") }
+        if state.buttonHome { print("Home button pressed (unintercepted!)") }
+        
+        // List of all buttons currently actuated
+        let pressed = state.pressedButtons
+        
+        // 6-Axis IMU sensor fusion
+        let pitch = state.pitch
+        let roll = state.roll
+        let yaw = state.yaw
+    }
+}
+
+// Stream connection state lifecycle
+Task {
+    for await isConnected in device.connections {
+        print("Controller connection status: \(isConnected)")
+    }
+}
+
+// Trigger dual-motor rumble asynchronously for 0.4 seconds
+Task {
+    await device.sendRumble(lowFrequency: 0.8, highFrequency: 0.4, duration: 0.4)
+}
+```
+
+### 2. Callback Closures
+
+```swift
+import EightBitDoKit
+
+let device = EightBitDoDevice.shared
+device.start()
+
 device.onConnectionChanged = { isConnected in
     print("8BitDo Controller Connected: \(isConnected)")
 }
 
-// 3. Listen to high-frequency state updates (500 Hz)
 device.onStateChanged = { state in
-    // Analog Thumbsticks (-1.0 ... 1.0)
-    let lx = state.leftStick.x
-    let ly = state.leftStick.y
-    let rx = state.rightStick.x
-    let ry = state.rightStick.y
-    
-    // Analog Triggers (0.0 ... 1.0 linear resolution)
-    let lt = state.leftTrigger
-    let rt = state.rightTrigger
-    
-    // Face Buttons & D-Pad
-    let isAPressed = state.buttonA
-    let isBPressed = state.isPressed(.b)
-    let isUpPressed = state.dpadUp
-    
-    // System Buttons (Unintercepted Home / Guide button!)
-    let isHomePressed = state.buttonHome
-    let isSelectPressed = state.buttonSelect
-    let isStartPressed = state.buttonStart
-    
-    // Hardware Back Paddles (M1 & M2)
-    if state.paddleM1 {
-        print("Left grip paddle M1 active")
+    // Real-time callback triggered on high-priority IOKit driver queue
+    if state.isPressed(.a) {
+        // Jump action
     }
-    if state.paddleM2 {
-        print("Right grip paddle M2 active")
-    }
-    
-    // Extra Bumper Buttons (L4 & R4)
-    if state.buttonL4 {
-        print("Extra bumper L4 active")
-    }
-    if state.buttonR4 {
-        print("Extra bumper R4 active")
-    }
-    
-    // 6-Axis Motion Sensor Fusion (IMU)
-    let pitchDeg = state.pitch // filtered pitch in degrees
-    let rollDeg  = state.roll  // filtered roll in degrees
-    let yawDeg   = state.yaw   // accumulated yaw in degrees
-    
-    // Raw angular velocity (deg/s) and gravity acceleration (g)
-    let rot = state.angularVelocityDeg // SIMD3<Float> (X, Y, Z) in °/s
-    let acc = state.acceleration       // SIMD3<Float> in g (~1.0g resting)
 }
+```
 
-// 4. Combine Publisher alternative (for SwiftUI or Reactive Pipelines)
-var cancellables = Set<AnyCancellable>()
-device.$state
-    .receive(on: DispatchQueue.main)
-    .sink { state in
-        // Updates synchronized with view hierarchy
+### 3. SwiftUI & Combine Publisher
+
+```swift
+import SwiftUI
+import EightBitDoKit
+
+struct ContentView: View {
+    @ObservedObject var device = EightBitDoDevice.shared
+    
+    var body: some View {
+        VStack {
+            Text(device.isConnected ? "Connected" : "Disconnected")
+            Text("Left Stick: \(device.state.leftStick.x, specifier: "%.2f"), \(device.state.leftStick.y, specifier: "%.2f")")
+            Text("Attitude: Pitch \(device.state.pitch, specifier: "%.1f")°, Roll \(device.state.roll, specifier: "%.1f")°")
+        }
     }
-    .store(in: &cancellables)
+}
+```
 
-// 5. Trigger Dual-Motor Force-Feedback Rumble
-// Heavy (low-frequency) motor at 80%, light (high-frequency) motor at 40% for 0.35s
-device.sendRumble(lowFrequency: 0.8, highFrequency: 0.4, duration: 0.35)
+### 4. Custom Filter Configuration & Gyro Drift Calibration
 
-// Continuous rumble until stopped
-device.sendRumble(lowFrequency: 0.6, highFrequency: 0.6)
-// Stop rumble
-device.stopRumble()
+```swift
+// Fine-tune complementary filter alpha or invert axes if desired
+device.configuration = EightBitDoPacketDecoder.Configuration(
+    complementaryFilterAlpha: 0.94, // gyro weighting
+    invertPitch: false,
+    invertRoll: false,
+    invertYaw: false,
+    autoZeroGyroBias: true // automatically cancel stationary zero-rate gyro drift
+)
 
-// 6. Recalibrate IMU Orientation Neutral
+// One-click orientation and drift zeroing
 device.resetOrientation()
+device.resetGyroBias()
 ```
 
 ---

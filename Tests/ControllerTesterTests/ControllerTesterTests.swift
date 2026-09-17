@@ -210,5 +210,141 @@ struct ControllerTesterTests {
         guard let state3 = s3 else { return }
         #expect(state3.pitch > 0.0) // Pitch is positive when tilted left
     }
+    
+    @Test("EightBitDoState ergonomics: polar angles, magnitudes, deadzones, and button lists")
+    func testEightBitDoStateErgonomics() {
+        var state = EightBitDoState()
+        #expect(!state.isAnyButtonPressed)
+        #expect(state.pressedButtons.isEmpty)
+        #expect(state.leftStickMagnitude == 0.0)
+        #expect(state.leftStickAngleDegrees == 0.0)
+        
+        // Right deflection (X: 1.0, Y: 0.0)
+        state.leftStick = CGPoint(x: 1.0, y: 0.0)
+        #expect(abs(state.leftStickMagnitude - 1.0) < 0.001)
+        #expect(abs(state.leftStickAngleDegrees - 0.0) < 0.001)
+        
+        // Up deflection (X: 0.0, Y: 1.0)
+        state.leftStick = CGPoint(x: 0.0, y: 1.0)
+        #expect(abs(state.leftStickMagnitude - 1.0) < 0.001)
+        #expect(abs(state.leftStickAngleDegrees - 90.0) < 0.001)
+        
+        // Left deflection (X: -1.0, Y: 0.0)
+        state.leftStick = CGPoint(x: -1.0, y: 0.0)
+        #expect(abs(state.leftStickAngleDegrees - 180.0) < 0.001)
+        
+        // Down deflection (X: 0.0, Y: -1.0)
+        state.leftStick = CGPoint(x: 0.0, y: -1.0)
+        #expect(abs(state.leftStickAngleDegrees - 270.0) < 0.001)
+        
+        // Radial Deadzone
+        // Deflection of 0.05 within default 0.08 deadzone should clamp to .zero
+        state.leftStick = CGPoint(x: 0.05, y: 0.0)
+        let filteredWithin = state.leftStickWithDeadzone(0.08)
+        #expect(filteredWithin == .zero)
+        
+        // Deflection above deadzone should smoothly scale
+        state.leftStick = CGPoint(x: 0.54, y: 0.0)
+        let filteredAbove = state.leftStickWithDeadzone(0.08)
+        #expect(filteredAbove.x > 0.45 && filteredAbove.x < 0.55)
+        #expect(filteredAbove.y == 0.0)
+        
+        // Buttons
+        state.buttonA = true
+        state.paddleM1 = true
+        state.buttonL4 = true
+        state.leftTrigger = 0.8
+        #expect(state.isAnyButtonPressed)
+        
+        let pressed = state.pressedButtons
+        #expect(pressed.contains(.a))
+        #expect(pressed.contains(.paddleM1))
+        #expect(pressed.contains(.l4))
+        #expect(pressed.contains(.lt))
+        #expect(!pressed.contains(.b))
+        #expect(!pressed.contains(.paddleM2))
+    }
+    
+    @Test("Stationary gyroscope zero-rate drift bias cancellation")
+    func testStationaryGyroBiasCancellation() {
+        let decoder = EightBitDoPacketDecoder(
+            configuration: EightBitDoPacketDecoder.Configuration(
+                autoZeroGyroBias: true,
+                stationaryDurationRequired: 0.20
+            )
+        )
+        decoder.resetOrientation()
+        decoder.resetGyroBias()
+        
+        var bytes = [UInt8](repeating: 0, count: 34)
+        bytes[0] = 0x01
+        
+        // Flat stationary resting: Az = +4096 (1.0g)
+        let azLE: UInt16 = 4096
+        bytes[19] = UInt8(azLE & 0xFF)
+        bytes[20] = UInt8((azLE >> 8) & 0xFF)
+        
+        // Small persistent zero-rate yaw drift on Gz: ~0.61 deg/s (10 LSB)
+        let gzLE: UInt16 = 10
+        bytes[25] = UInt8(gzLE & 0xFF)
+        bytes[26] = UInt8((gzLE >> 8) & 0xFF)
+        
+        let data = Data(bytes)
+        
+        // Initial sample
+        var lastState = decoder.decode(data: data, timestamp: 1.0)
+        #expect(lastState != nil)
+        
+        // Simulate resting on desk for 0.5 seconds at 50Hz (25 packets)
+        for i in 1...25 {
+            let t = 1.0 + Double(i) * 0.02
+            lastState = decoder.decode(data: data, timestamp: t)
+        }
+        
+        // Gyro bias should have begun converging towards 0.61 deg/s
+        let bias = decoder.currentGyroBiasDeg
+        #expect(bias.z > 0.1) // Bias was learned
+        
+        // Corrected angular velocity should be reduced compared to raw 0.61
+        if let st = lastState {
+            #expect(st.angularVelocityDeg.z < 0.61)
+        }
+    }
+    
+    @Test("Decoder Configuration axis inversion")
+    func testDecoderConfigurationInversion() {
+        var config = EightBitDoPacketDecoder.Configuration()
+        config.invertPitch = true
+        config.invertRoll = true
+        config.invertYaw = true
+        
+        let decoder = EightBitDoPacketDecoder(configuration: config)
+        decoder.resetOrientation(pitch: 10, roll: 20, yaw: 30)
+        
+        var bytes = [UInt8](repeating: 0, count: 34)
+        bytes[0] = 0x01
+        let azLE: UInt16 = 4096
+        bytes[19] = UInt8(azLE & 0xFF)
+        bytes[20] = UInt8((azLE >> 8) & 0xFF)
+        
+        let state = decoder.decode(data: Data(bytes), timestamp: 1.0)
+        #expect(state != nil)
+        #expect(decoder.configuration.invertPitch == true)
+        #expect(decoder.configuration.invertRoll == true)
+        #expect(decoder.configuration.invertYaw == true)
+    }
+    
+    @Test("EightBitDoDevice AsyncStream connections yield current state immediately")
+    func testDeviceAsyncStreams() async {
+        let device = EightBitDoDevice()
+        var receivedConnection = false
+        for await isConn in device.connections {
+            receivedConnection = true
+            #expect(isConn == false)
+            break
+        }
+        #expect(receivedConnection == true)
+    }
 }
+
 

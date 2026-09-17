@@ -4,24 +4,114 @@ import simd
 
 /// Decodes raw 34-byte Report ID 1 packets from the 8BitDo Ultimate 2 Wireless Controller into `EightBitDoState`.
 public final class EightBitDoPacketDecoder: @unchecked Sendable {
+    
+    /// User-configurable tuning parameters for filtering and axis interpretation.
+    public struct Configuration: Sendable, Equatable {
+        /// Weight of gyro integration vs accelerometer reference in complementary filter (0.0 to 1.0)
+        public var complementaryFilterAlpha: Double
+        
+        /// Invert estimated attitude pitch
+        public var invertPitch: Bool
+        
+        /// Invert estimated attitude roll
+        public var invertRoll: Bool
+        
+        /// Invert estimated attitude yaw
+        public var invertYaw: Bool
+        
+        /// Whether to automatically track and cancel stationary gyro zero-rate drift bias
+        public var autoZeroGyroBias: Bool
+        
+        /// Acceleration tolerance from 1.0g to qualify as stationary
+        public var restingGravityToleranceG: Float
+        
+        /// Maximum angular rate (deg/s) on each axis to qualify as stationary
+        public var restingAngularVelocityThresholdDeg: Float
+        
+        /// Stationary duration required before beginning bias convergence (in seconds)
+        public var stationaryDurationRequired: TimeInterval
+        
+        public init(
+            complementaryFilterAlpha: Double = 0.94,
+            invertPitch: Bool = false,
+            invertRoll: Bool = false,
+            invertYaw: Bool = false,
+            autoZeroGyroBias: Bool = true,
+            restingGravityToleranceG: Float = 0.08,
+            restingAngularVelocityThresholdDeg: Float = 2.0,
+            stationaryDurationRequired: TimeInterval = 0.35
+        ) {
+            self.complementaryFilterAlpha = complementaryFilterAlpha
+            self.invertPitch = invertPitch
+            self.invertRoll = invertRoll
+            self.invertYaw = invertYaw
+            self.autoZeroGyroBias = autoZeroGyroBias
+            self.restingGravityToleranceG = restingGravityToleranceG
+            self.restingAngularVelocityThresholdDeg = restingAngularVelocityThresholdDeg
+            self.stationaryDurationRequired = stationaryDurationRequired
+        }
+    }
+    
     private var filterPitch: Double = 0.0
     private var filterRoll: Double = 0.0
     private var filterYaw: Double = 0.0
     private var lastTimestamp: Double = 0.0
     private var reportCount: UInt64 = 0
+    private var gyroBiasDeg: SIMD3<Float> = .zero
+    private var stationarySince: TimeInterval = 0.0
+    private var config: Configuration = Configuration()
     
     private let lock = NSLock()
     
-    public init() {}
+    public init(configuration: Configuration = Configuration()) {
+        self.config = configuration
+    }
     
-    public func resetOrientation() {
+    /// Current decoder configuration
+    public var configuration: Configuration {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return config
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            config = newValue
+        }
+    }
+    
+    /// Estimated stationary zero-rate gyroscope bias in deg/s (X, Y, Z)
+    public var currentGyroBiasDeg: SIMD3<Float> {
         lock.lock()
         defer { lock.unlock() }
-        filterPitch = 0.0
-        filterRoll = 0.0
-        filterYaw = 0.0
+        return gyroBiasDeg
+    }
+    
+    /// Resets the estimated attitude and zeros the accumulated yaw
+    public func resetOrientation(pitch: Float = 0, roll: Float = 0, yaw: Float = 0) {
+        lock.lock()
+        defer { lock.unlock() }
+        filterPitch = Double(pitch) * (.pi / 180.0)
+        filterRoll = Double(roll) * (.pi / 180.0)
+        filterYaw = Double(yaw) * (.pi / 180.0)
         reportCount = 0
         lastTimestamp = 0.0
+    }
+    
+    /// Resets the estimated stationary gyro zero-rate bias to zero
+    public func resetGyroBias() {
+        lock.lock()
+        defer { lock.unlock() }
+        gyroBiasDeg = .zero
+        stationarySince = 0.0
+    }
+    
+    /// Sets a manual gyro bias offset in deg/s
+    public func setGyroBias(deg: SIMD3<Float>) {
+        lock.lock()
+        defer { lock.unlock() }
+        gyroBiasDeg = deg
     }
     
     public func decode(data: Data, timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime) -> EightBitDoState? {
@@ -106,16 +196,44 @@ public final class EightBitDoPacketDecoder: @unchecked Sendable {
             let ay = Float(rawAy) / EightBitDoConstants.accelScale
             let az = Float(rawAz) / EightBitDoConstants.accelScale
             
-            let gxDeg = Float(rawGx) * EightBitDoConstants.gyroScaleDegPerLSB
-            let gyDeg = Float(rawGy) * EightBitDoConstants.gyroScaleDegPerLSB
-            let gzDeg = Float(rawGz) * EightBitDoConstants.gyroScaleDegPerLSB
+            var gxDeg = Float(rawGx) * EightBitDoConstants.gyroScaleDegPerLSB
+            var gyDeg = Float(rawGy) * EightBitDoConstants.gyroScaleDegPerLSB
+            var gzDeg = Float(rawGz) * EightBitDoConstants.gyroScaleDegPerLSB
             
-            let gxRad = Float(rawGx) * EightBitDoConstants.gyroScaleRadPerLSB
-            let gyRad = Float(rawGy) * EightBitDoConstants.gyroScaleRadPerLSB
-            let gzRad = Float(rawGz) * EightBitDoConstants.gyroScaleRadPerLSB
-            
-            // Sensor Fusion (Complementary Filter)
+            // Sensor Fusion (Complementary Filter) & Stationary Drift Bias Estimation
             self.lock.lock()
+            
+            if self.config.autoZeroGyroBias {
+                let accelMag = sqrt(ax * ax + ay * ay + az * az)
+                let isStationary = abs(accelMag - 1.0) < self.config.restingGravityToleranceG &&
+                                   abs(gxDeg) < self.config.restingAngularVelocityThresholdDeg &&
+                                   abs(gyDeg) < self.config.restingAngularVelocityThresholdDeg &&
+                                   abs(gzDeg) < self.config.restingAngularVelocityThresholdDeg
+                
+                if isStationary {
+                    if self.stationarySince == 0 {
+                        self.stationarySince = timestamp
+                    } else if (timestamp - self.stationarySince) >= self.config.stationaryDurationRequired {
+                        // Slowly adapt stationary zero-bias offset
+                        let biasAlpha: Float = 0.02
+                        self.gyroBiasDeg.x = self.gyroBiasDeg.x * (1.0 - biasAlpha) + gxDeg * biasAlpha
+                        self.gyroBiasDeg.y = self.gyroBiasDeg.y * (1.0 - biasAlpha) + gyDeg * biasAlpha
+                        self.gyroBiasDeg.z = self.gyroBiasDeg.z * (1.0 - biasAlpha) + gzDeg * biasAlpha
+                    }
+                } else {
+                    self.stationarySince = 0
+                }
+            }
+            
+            // Subtract stationary bias
+            gxDeg -= self.gyroBiasDeg.x
+            gyDeg -= self.gyroBiasDeg.y
+            gzDeg -= self.gyroBiasDeg.z
+            
+            let gxRad = gxDeg * (Float.pi / 180.0)
+            let gyRad = gyDeg * (Float.pi / 180.0)
+            let gzRad = gzDeg * (Float.pi / 180.0)
+            
             let dt: Double
             if self.lastTimestamp == 0.0 {
                 dt = 0.016
@@ -135,15 +253,20 @@ public final class EightBitDoPacketDecoder: @unchecked Sendable {
                 self.filterPitch = accelPitch
                 self.filterRoll = accelRoll
             } else {
-                let alpha = 0.94
+                let alpha = self.config.complementaryFilterAlpha
                 self.filterPitch = alpha * (self.filterPitch + Double(gyRad) * dt) + (1.0 - alpha) * accelPitch
                 self.filterRoll = alpha * (self.filterRoll + Double(gxRad) * dt) + (1.0 - alpha) * accelRoll
                 self.filterYaw += Double(gzRad) * dt
             }
             
-            let currentPitch = Float(self.filterPitch * (180.0 / .pi))
-            let currentRoll = Float(self.filterRoll * (180.0 / .pi))
-            let currentYaw = Float(self.filterYaw * (180.0 / .pi))
+            var currentPitch = Float(self.filterPitch * (180.0 / .pi))
+            var currentRoll = Float(self.filterRoll * (180.0 / .pi))
+            var currentYaw = Float(self.filterYaw * (180.0 / .pi))
+            
+            if self.config.invertPitch { currentPitch = -currentPitch }
+            if self.config.invertRoll { currentRoll = -currentRoll }
+            if self.config.invertYaw { currentYaw = -currentYaw }
+            
             let index = self.reportCount
             self.lock.unlock()
             
