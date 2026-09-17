@@ -21,6 +21,8 @@ public struct EightBitDoState: Equatable, Sendable {
     // Bumpers
     public var buttonLB: Bool
     public var buttonRB: Bool
+    public var buttonL4: Bool
+    public var buttonR4: Bool
     
     // Stick Clicks
     public var buttonL3: Bool
@@ -65,6 +67,8 @@ public struct EightBitDoState: Equatable, Sendable {
         buttonY: Bool = false,
         buttonLB: Bool = false,
         buttonRB: Bool = false,
+        buttonL4: Bool = false,
+        buttonR4: Bool = false,
         buttonL3: Bool = false,
         buttonR3: Bool = false,
         buttonSelect: Bool = false,
@@ -96,6 +100,8 @@ public struct EightBitDoState: Equatable, Sendable {
         self.buttonY = buttonY
         self.buttonLB = buttonLB
         self.buttonRB = buttonRB
+        self.buttonL4 = buttonL4
+        self.buttonR4 = buttonR4
         self.buttonL3 = buttonL3
         self.buttonR3 = buttonR3
         self.buttonSelect = buttonSelect
@@ -140,6 +146,8 @@ public struct EightBitDoState: Equatable, Sendable {
         case .dpadRight: return dpadRight
         case .paddleM1: return paddleM1
         case .paddleM2: return paddleM2
+        case .l4: return buttonL4
+        case .r4: return buttonR4
         }
     }
 }

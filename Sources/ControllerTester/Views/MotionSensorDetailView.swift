@@ -12,13 +12,6 @@ public struct MotionSensorDetailView: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                if let advisory = state.hardwareAdvisory {
-                    HardwareAdvisoryView(
-                        title: "8BitDo Hardware Integration Status",
-                        message: advisory
-                    )
-                }
-                
                 Motion3DView(motion: state.motion, onRecalibrate: onRecalibrate)
                 
                 // Acceleration & Force Breakdown

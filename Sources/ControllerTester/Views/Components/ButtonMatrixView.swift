@@ -32,6 +32,11 @@ public struct ButtonMatrixView: View {
                 
                 ButtonItemCard(name: "Left Bumper (LB)", symbol: "l1.rectangle.roundedbottom", btnState: state.leftShoulder, accent: .purple)
                 ButtonItemCard(name: "Right Bumper (RB)", symbol: "r1.rectangle.roundedbottom", btnState: state.rightShoulder, accent: .purple)
+                ButtonItemCard(name: "Extra Bumper (L4)", symbol: "4.square.fill", btnState: state.buttonL4, accent: .indigo)
+                ButtonItemCard(name: "Extra Bumper (R4)", symbol: "4.square.fill", btnState: state.buttonR4, accent: .indigo)
+                
+                ButtonItemCard(name: "Left Paddle (M1)", symbol: "chevron.left.2", btnState: state.paddle1, accent: .mint)
+                ButtonItemCard(name: "Right Paddle (M2)", symbol: "chevron.right.2", btnState: state.paddle2, accent: .mint)
                 
                 ButtonItemCard(name: "Left Stick (L3)", symbol: "l.joystick.press.down", btnState: state.leftStickButton, accent: .blue)
                 ButtonItemCard(name: "Right Stick (R3)", symbol: "r.joystick.press.down", btnState: state.rightStickButton, accent: .purple)

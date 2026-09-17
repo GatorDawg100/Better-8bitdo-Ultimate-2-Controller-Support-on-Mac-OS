@@ -2,8 +2,8 @@ import Foundation
 import CoreHaptics
 import GameController
 import SwiftUI
-import IOKit
-import IOKit.hid
+import Combine
+import EightBitDoKit
 
 public enum HapticPresetPattern: String, CaseIterable, Identifiable, Sendable {
     case quickTap = "Single Tap"
@@ -37,15 +37,21 @@ public final class HapticsManager: ObservableObject {
     
     private var engine: CHHapticEngine?
     private var activePlayer: CHHapticPatternPlayer?
-    private var continuousPlayer: CHHapticAdvancedPatternPlayer?
     private weak var currentController: GCController?
-    
-    // Retained native macOS USB HID handles (keeps device open for 8BitDo D-Input / 2.4G Report ID 5)
-    private var hidManager: IOHIDManager?
-    private var directHIDDevice: IOHIDDevice?
+    private var cancellables = Set<AnyCancellable>()
     
     public init() {
-        setupDirectHID()
+        self.isDirectHIDActive = EightBitDoDevice.shared.isConnected
+        EightBitDoDevice.shared.$isConnected
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] connected in
+                guard let self = self else { return }
+                self.isDirectHIDActive = connected
+                if connected {
+                    self.statusMessage = "Direct Force-Feedback Active"
+                }
+            }
+            .store(in: &cancellables)
     }
     
     public func setController(_ controller: GCController?) {
@@ -53,34 +59,22 @@ public final class HapticsManager: ObservableObject {
         stopHaptics()
         
         if let controller = controller, controller.haptics != nil {
-            // Apple GameController CoreHaptics pathway
-            isDirectHIDActive = false
-            directHIDDevice = nil
             setupEngine()
+            statusMessage = "Ready (\(controller.vendorName ?? "Controller"))"
+            self.isDirectHIDActive = EightBitDoDevice.shared.isConnected
+        } else if EightBitDoDevice.shared.isConnected {
+            self.isDirectHIDActive = true
+            statusMessage = "Direct Force-Feedback Active"
         } else {
-            // Direct native macOS USB HID Force-Feedback (PID Page 0x0F / Report ID 5)
-            setupDirectHID()
-            if directHIDDevice != nil {
-                self.isDirectHIDActive = true
-                self.statusMessage = "Direct macOS USB Force-Feedback Active (Whole Controller)"
-            } else {
-                self.isDirectHIDActive = false
-                self.engine = nil
-                if let c = controller {
-                    statusMessage = "\(c.vendorName ?? "Controller") (Simulation Fallback)"
-                } else {
-                    statusMessage = "No controller connected (Simulation Mode)"
-                }
-            }
+            self.isDirectHIDActive = false
+            self.engine = nil
+            statusMessage = controller != nil ? "Ready" : "Simulation Mode"
         }
     }
     
     public func setupEngine() {
         guard let controller = currentController, let haptics = controller.haptics else {
             engine = nil
-            if isDirectHIDActive {
-                statusMessage = "Direct macOS USB Force-Feedback Active"
-            }
             return
         }
         
@@ -91,262 +85,185 @@ public final class HapticsManager: ObservableObject {
                 return
             }
             
+            newEngine.resetHandler = { [weak self] in
+                try? self?.engine?.start()
+            }
+            newEngine.stoppedHandler = { [weak self] _ in
+                try? self?.engine?.start()
+            }
+            
             engine = newEngine
             try engine?.start()
             statusMessage = "Apple CoreHaptics active"
         } catch {
-            statusMessage = "Engine start failed: \(error.localizedDescription)"
+            statusMessage = "CoreHaptics init: \(error.localizedDescription)"
         }
     }
     
     public func playPreset(_ preset: HapticPresetPattern) {
         isVibrating = true
+        statusMessage = "Playing \(preset.rawValue)..."
         
-        // 1. Direct macOS USB HID pathway (8BitDo D-Input / 2.4G)
-        if directHIDDevice == nil && currentController?.haptics == nil {
-            setupDirectHID()
-        }
-        if let dev = directHIDDevice {
-            playDirectHIDPreset(preset, device: dev)
-            return
+        // 1. Direct native EightBitDoKit driver rumble
+        if EightBitDoDevice.shared.isConnected {
+            playDirectHIDPreset(preset)
         }
         
-        // 2. Apple GameController CoreHaptics pathway
-        guard let controller = currentController, controller.haptics != nil else {
-            statusMessage = "Simulated haptic: \(preset.rawValue)"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                self?.isVibrating = false
-            }
-            return
-        }
-        
-        do {
-            if engine == nil {
-                setupEngine()
-            }
-            guard let engine = engine else {
-                isVibrating = false
-                return
-            }
-            try engine.start()
-            
-            let pattern = try createPattern(for: preset)
-            activePlayer = try engine.makePlayer(with: pattern)
-            try activePlayer?.start(atTime: CHHapticTimeImmediate)
-            statusMessage = "Playing \(preset.rawValue) via CoreHaptics"
-            
-            let duration: Double = {
-                switch preset {
-                case .quickTap: return 0.2
-                case .doubleTap: return 0.4
-                case .heartbeat: return 0.6
-                case .heavyImpact: return 0.5
-                case .weaponBurst: return 0.7
-                case .continuous: return 1.5
-                }
-            }()
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-                self?.isVibrating = false
-            }
-        } catch {
-            statusMessage = "Playback error: \(error.localizedDescription)"
-            isVibrating = false
-        }
+        // 2. Apple GameController CoreHaptics pathway (e.g. DualSense)
+        playCoreHapticsPreset(preset)
     }
     
     public func startContinuousRumble() {
         isVibrating = true
+        statusMessage = "Continuous rumble active"
         
-        // Direct HID pathway
-        if directHIDDevice == nil && currentController?.haptics == nil {
-            setupDirectHID()
-        }
-        if let dev = directHIDDevice {
-            sendDirectRumble(intensity: intensity, device: dev)
-            statusMessage = "Direct USB continuous rumble active"
-            return
+        if EightBitDoDevice.shared.isConnected {
+            EightBitDoDevice.shared.sendRumble(lowFrequency: intensity, highFrequency: sharpness)
         }
         
-        guard let controller = currentController, controller.haptics != nil else {
-            statusMessage = "Simulated continuous rumble active"
-            return
-        }
-        
-        do {
-            if engine == nil {
-                setupEngine()
+        // Apple CoreHaptics
+        if let controller = currentController, controller.haptics != nil {
+            do {
+                if engine == nil { setupEngine() }
+                if let engine = engine {
+                    try engine.start()
+                    let intParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: max(0.2, intensity))
+                    let shpParam = CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
+                    let event = CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: 0, duration: 30.0)
+                    let pattern = try CHHapticPattern(events: [event], parameters: [])
+                    let player = try engine.makePlayer(with: pattern)
+                    try player.start(atTime: CHHapticTimeImmediate)
+                    self.activePlayer = player
+                }
+            } catch {
+                // Ignore CoreHaptics error when direct HID is active
             }
-            guard let engine = engine else {
-                isVibrating = false
-                return
-            }
-            try engine.start()
-            
-            let intensityParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity)
-            let sharpnessParam = CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
-            let event = CHHapticEvent(eventType: .hapticContinuous, parameters: [intensityParam, sharpnessParam], relativeTime: 0, duration: 30.0)
-            let pattern = try CHHapticPattern(events: [event], parameters: [])
-            
-            let player = try engine.makeAdvancedPlayer(with: pattern)
-            try player.start(atTime: CHHapticTimeImmediate)
-            self.continuousPlayer = player
-            statusMessage = "Continuous CoreHaptics rumble playing"
-        } catch {
-            statusMessage = "Continuous error: \(error.localizedDescription)"
-            isVibrating = false
         }
     }
     
     public func stopHaptics() {
         isVibrating = false
-        
-        if let dev = directHIDDevice {
-            sendDirectRumble(intensity: 0, device: dev)
-        }
-        
-        try? continuousPlayer?.stop(atTime: CHHapticTimeImmediate)
+        EightBitDoDevice.shared.stopRumble()
         try? activePlayer?.stop(atTime: CHHapticTimeImmediate)
-        continuousPlayer = nil
         activePlayer = nil
         statusMessage = "Haptics stopped"
     }
     
-    // MARK: - Direct Native macOS USB HID Force-Feedback (Unified Whole-Controller Vibration)
+    // MARK: - Direct Native EightBitDo Preset Sequencer
     
-    private func setupDirectHID() {
-        if hidManager == nil {
-            let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-            let matchDict = [
-                kIOHIDVendorIDKey as String: 0x2dc8
-            ] as CFDictionary
-            IOHIDManagerSetDeviceMatching(mgr, matchDict)
-            _ = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
-            self.hidManager = mgr
-        }
-        
-        if let mgr = hidManager,
-           let deviceSet = IOHIDManagerCopyDevices(mgr) as? Set<IOHIDDevice>,
-           let dev = deviceSet.first {
-            _ = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
-            self.directHIDDevice = dev
-            self.isDirectHIDActive = true
-            self.statusMessage = "Direct macOS USB Force-Feedback Active (Report ID 5)"
-        }
-    }
-    
-    private func sendDirectRumble(intensity: Float, device: IOHIDDevice) {
-        let val = UInt8(max(0, min(100, intensity * 100)))
-        // Unified output report: sets all motor channels together for the whole controller
-        var report: [UInt8] = [val, val, val, val]
-        let res = IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 5, &report, report.count)
-        if res != kIOReturnSuccess {
-            _ = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
-            _ = IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 5, &report, report.count)
-        }
-    }
-    
-    private func playDirectHIDPreset(_ preset: HapticPresetPattern, device: IOHIDDevice) {
-        statusMessage = "Playing \(preset.rawValue) (Unified Rumble)"
-        
+    private func playDirectHIDPreset(_ preset: HapticPresetPattern) {
         switch preset {
         case .quickTap:
-            sendDirectRumble(intensity: intensity, device: device)
+            EightBitDoDevice.shared.sendRumble(lowFrequency: intensity, highFrequency: sharpness)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                guard let self = self else { return }
-                self.sendDirectRumble(intensity: 0, device: device)
-                self.isVibrating = false
+                EightBitDoDevice.shared.stopRumble()
+                self?.isVibrating = false
             }
             
         case .doubleTap:
-            sendDirectRumble(intensity: intensity, device: device)
+            EightBitDoDevice.shared.sendRumble(lowFrequency: intensity, highFrequency: sharpness)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                guard let self = self else { return }
-                self.sendDirectRumble(intensity: 0, device: device)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-                    self.sendDirectRumble(intensity: self.intensity, device: device)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        self.sendDirectRumble(intensity: 0, device: device)
-                        self.isVibrating = false
+                EightBitDoDevice.shared.stopRumble()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
+                    guard let self = self else { return }
+                    EightBitDoDevice.shared.sendRumble(lowFrequency: self.intensity, highFrequency: self.sharpness)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                        EightBitDoDevice.shared.stopRumble()
+                        self?.isVibrating = false
                     }
                 }
             }
             
         case .heartbeat:
-            sendDirectRumble(intensity: intensity, device: device)
+            EightBitDoDevice.shared.sendRumble(lowFrequency: intensity, highFrequency: sharpness)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-                guard let self = self else { return }
-                self.sendDirectRumble(intensity: 0, device: device)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    self.sendDirectRumble(intensity: self.intensity * 0.7, device: device)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        self.sendDirectRumble(intensity: 0, device: device)
-                        self.isVibrating = false
+                EightBitDoDevice.shared.stopRumble()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                    guard let self = self else { return }
+                    EightBitDoDevice.shared.sendRumble(lowFrequency: self.intensity * 0.7, highFrequency: self.sharpness * 0.5)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        EightBitDoDevice.shared.stopRumble()
+                        self?.isVibrating = false
                     }
                 }
             }
             
         case .heavyImpact:
-            sendDirectRumble(intensity: 1.0, device: device)
+            EightBitDoDevice.shared.sendRumble(lowFrequency: 1.0, highFrequency: 1.0)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                guard let self = self else { return }
-                self.sendDirectRumble(intensity: 0, device: device)
-                self.isVibrating = false
+                EightBitDoDevice.shared.stopRumble()
+                self?.isVibrating = false
             }
             
         case .weaponBurst:
             for i in 0..<4 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) { [weak self] in
                     guard let self = self else { return }
-                    self.sendDirectRumble(intensity: self.intensity, device: device)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-                        self.sendDirectRumble(intensity: 0, device: device)
-                        if i == 3 { self.isVibrating = false }
+                    EightBitDoDevice.shared.sendRumble(lowFrequency: self.intensity, highFrequency: self.sharpness)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+                        EightBitDoDevice.shared.stopRumble()
+                        if i == 3 { self?.isVibrating = false }
                     }
                 }
             }
             
         case .continuous:
-            sendDirectRumble(intensity: intensity, device: device)
+            EightBitDoDevice.shared.sendRumble(lowFrequency: intensity, highFrequency: sharpness)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self = self else { return }
-                self.sendDirectRumble(intensity: 0, device: device)
-                self.isVibrating = false
+                EightBitDoDevice.shared.stopRumble()
+                self?.isVibrating = false
             }
         }
     }
     
-    // MARK: - CoreHaptics Pattern Generator
+    // MARK: - CoreHaptics Pattern Generator (ERM Continuous Events)
+    
+    private func playCoreHapticsPreset(_ preset: HapticPresetPattern) {
+        guard let controller = currentController, controller.haptics != nil else { return }
+        
+        do {
+            if engine == nil { setupEngine() }
+            guard let engine = engine else { return }
+            try engine.start()
+            
+            let pattern = try createPattern(for: preset)
+            activePlayer = try engine.makePlayer(with: pattern)
+            try activePlayer?.start(atTime: CHHapticTimeImmediate)
+        } catch {
+            // CoreHaptics fallback handled by direct HID
+        }
+    }
     
     private func createPattern(for preset: HapticPresetPattern) throws -> CHHapticPattern {
         var events: [CHHapticEvent] = []
-        let intParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity)
+        let intParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: max(0.2, intensity))
         let shpParam = CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
         
         switch preset {
         case .quickTap:
-            events.append(CHHapticEvent(eventType: .hapticTransient, parameters: [intParam, shpParam], relativeTime: 0))
+            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: 0, duration: 0.14))
             
         case .doubleTap:
-            events.append(CHHapticEvent(eventType: .hapticTransient, parameters: [intParam, shpParam], relativeTime: 0))
-            events.append(CHHapticEvent(eventType: .hapticTransient, parameters: [intParam, shpParam], relativeTime: 0.15))
+            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: 0, duration: 0.09))
+            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: 0.16, duration: 0.09))
             
         case .heartbeat:
             let lowSharp = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.2)
             let highInt = CHHapticEventParameter(parameterID: .hapticIntensity, value: min(1.0, intensity * 1.1))
-            events.append(CHHapticEvent(eventType: .hapticTransient, parameters: [highInt, lowSharp], relativeTime: 0))
-            events.append(CHHapticEvent(eventType: .hapticTransient, parameters: [intParam, lowSharp], relativeTime: 0.2))
+            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [highInt, lowSharp], relativeTime: 0, duration: 0.14))
+            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, lowSharp], relativeTime: 0.22, duration: 0.18))
             
         case .heavyImpact:
-            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: 0, duration: 0.35))
+            let maxInt = CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0)
+            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [maxInt, shpParam], relativeTime: 0, duration: 0.40))
             
         case .weaponBurst:
             for i in 0..<4 {
-                events.append(CHHapticEvent(eventType: .hapticTransient, parameters: [intParam, shpParam], relativeTime: Double(i) * 0.1))
+                events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: Double(i) * 0.12, duration: 0.07))
             }
             
         case .continuous:
-            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: 0, duration: 1.5))
+            events.append(CHHapticEvent(eventType: .hapticContinuous, parameters: [intParam, shpParam], relativeTime: 0, duration: 2.0))
         }
         
         return try CHHapticPattern(events: events, parameters: [])

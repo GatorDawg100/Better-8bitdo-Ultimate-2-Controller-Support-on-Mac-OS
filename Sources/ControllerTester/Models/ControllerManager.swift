@@ -5,14 +5,6 @@ import SwiftUI
 import IOKit
 import IOKit.hid
 import EightBitDoKit
-import DualSenseEmulationKit
-
-private final class HIDBuffer: @unchecked Sendable {
-    let pointer: UnsafeMutablePointer<UInt8> = .allocate(capacity: 64)
-    deinit {
-        pointer.deallocate()
-    }
-}
 
 @MainActor
 public final class ControllerManager: ObservableObject {
@@ -33,18 +25,6 @@ public final class ControllerManager: ObservableObject {
     public let simulator: SimulatedController
     
     private var cancellables = Set<AnyCancellable>()
-    
-    // Direct native macOS USB HID motion reader (for 8BitDo D-Input / 2.4G IMU packet)
-    private var hidMotionManager: IOHIDManager?
-    private var directHIDDevice: IOHIDDevice?
-    private var reportBuffer: HIDBuffer?
-    
-    // 6-Axis IMU sensor fusion state
-    private var filterPitch: Double = 0.0
-    private var filterRoll: Double = 0.0
-    private var filterYaw: Double = 0.0
-    private var lastMotionTimestamp: Double = 0.0
-    private var motionReportCount: Int = 0
     
     private let standardElementKeys: Set<String> = [
         "Button A", "Button B", "Button X", "Button Y",
@@ -68,7 +48,6 @@ public final class ControllerManager: ObservableObject {
         
         setupNotificationObservers()
         setupEightBitDoSubscription()
-        setupDirectHIDMotion()
         refreshControllers()
     }
     
@@ -125,25 +104,35 @@ public final class ControllerManager: ObservableObject {
     private func handleEightBitDoState(_ ebState: EightBitDoState) {
         guard !isSimulatedMode else { return }
         
-        // 1. Back Paddles (M1 & M2)
+        // 1. Back Paddles (M1 & M2) and Extra Bumpers (L4 & R4)
         state.paddle1.update(pressed: ebState.paddleM1, value: ebState.paddleM1 ? 1.0 : 0.0)
         state.paddle2.update(pressed: ebState.paddleM2, value: ebState.paddleM2 ? 1.0 : 0.0)
+        state.buttonL4.update(pressed: ebState.buttonL4, value: ebState.buttonL4 ? 1.0 : 0.0)
+        state.buttonR4.update(pressed: ebState.buttonR4, value: ebState.buttonR4 ? 1.0 : 0.0)
         
-        // 2. Motion IMU Attitude & Rates
+        // Home Button from raw EightBitDo report
+        state.buttonHome.update(pressed: ebState.buttonHome, value: ebState.buttonHome ? 1.0 : 0.0)
+        
+        // Linear user acceleration: total acceleration minus normalized gravity vector
+        let uax = Double(ebState.acceleration.x - ebState.gravity.x)
+        let uay = Double(ebState.acceleration.y - ebState.gravity.y)
+        let uaz = Double(ebState.acceleration.z - ebState.gravity.z)
+        
+        // 2. Motion IMU Attitude & Rates (Pitch = gyRad/Y rate, Roll = gxRad/X rate)
         state.motion = ControllerMotionState(
             hasMotion: true,
             pitch: Double(ebState.pitch) * .pi / 180.0,
             roll: Double(ebState.roll) * .pi / 180.0,
             yaw: Double(ebState.yaw) * .pi / 180.0,
-            rotationRateX: Double(ebState.angularVelocityDeg.x),
-            rotationRateY: Double(ebState.angularVelocityDeg.y),
-            rotationRateZ: Double(ebState.angularVelocityDeg.z),
+            rotationRateX: Double(ebState.angularVelocityRad.y),
+            rotationRateY: Double(ebState.angularVelocityRad.x),
+            rotationRateZ: Double(ebState.angularVelocityRad.z),
             gravityX: Double(ebState.acceleration.x),
             gravityY: Double(ebState.acceleration.y),
             gravityZ: Double(ebState.acceleration.z),
-            userAccelX: 0.0,
-            userAccelY: 0.0,
-            userAccelZ: 0.0
+            userAccelX: uax,
+            userAccelY: uay,
+            userAccelZ: uaz
         )
         
         // 3. If no Apple GCController is active, drive full gamepad state from EightBitDoKit
@@ -163,8 +152,15 @@ public final class ControllerManager: ObservableObject {
             state.dpadLeft.update(pressed: ebState.dpadLeft, value: ebState.dpadLeft ? 1.0 : 0.0)
             state.dpadRight.update(pressed: ebState.dpadRight, value: ebState.dpadRight ? 1.0 : 0.0)
             
-            state.leftStick = ThumbstickState(x: Float(ebState.leftStick.x), y: Float(ebState.leftStick.y))
-            state.rightStick = ThumbstickState(x: Float(ebState.rightStick.x), y: Float(ebState.rightStick.y))
+            let lx = Float(ebState.leftStick.x)
+            let ly = Float(ebState.leftStick.y)
+            let rx = Float(ebState.rightStick.x)
+            let ry = Float(ebState.rightStick.y)
+            
+            state.leftStick = ThumbstickState(x: lx, y: ly)
+            state.rightStick = ThumbstickState(x: rx, y: ry)
+            driftManager.update(leftX: lx, leftY: ly, rightX: rx, rightY: ry)
+            
             state.leftStickButton.update(pressed: ebState.buttonL3, value: ebState.buttonL3 ? 1.0 : 0.0)
             state.rightStickButton.update(pressed: ebState.buttonR3, value: ebState.buttonR3 ? 1.0 : 0.0)
             
@@ -229,15 +225,7 @@ public final class ControllerManager: ObservableObject {
         if vendor.localizedCaseInsensitiveContains("8BitDo") || vendor.localizedCaseInsensitiveContains("PC") || cat == "HID" {
             state.isHidPCMode = true
             state.hasHaptics = hapticsManager.isDirectHIDActive || (controller.haptics != nil)
-            state.hardwareAdvisory = """
-            8BitDo Direct Hardware Integration Active!
-            
-            • 6-Axis Gyroscope & Accelerometer: Streaming live from 8BitDo's native 6-axis IMU packet.
-            • Dual-Motor Haptics: Streaming live via USB Force-Feedback (PID Report ID 5).
-            • Extra Back Paddle Buttons: M1, M2, L4, and R4 are active in the Button Matrix.
-            
-            Both Gyro and Haptics are now working directly in your current 2.4 GHz / D-Input mode!
-            """
+            state.hardwareAdvisory = nil
         } else {
             state.isHidPCMode = false
             state.hardwareAdvisory = nil
@@ -276,7 +264,6 @@ public final class ControllerManager: ObservableObject {
     public func setSimulatedMode(_ enabled: Bool) {
         isSimulatedMode = enabled
         if enabled {
-            detachDirectHIDMotion()
             selectedController = nil
             hapticsManager.setController(nil)
             simulator.start()
@@ -287,7 +274,6 @@ public final class ControllerManager: ObservableObject {
             )
         } else {
             simulator.stop()
-            setupDirectHIDMotion()
         }
     }
     
@@ -319,7 +305,6 @@ public final class ControllerManager: ObservableObject {
     
     private func controllerDidDisconnect(_ controller: GCController) {
         connectedControllers.removeAll { $0 === controller }
-        detachDirectHIDMotion()
         inputLog.log(
             element: "Controller Disconnected",
             category: .system,
@@ -343,6 +328,50 @@ public final class ControllerManager: ObservableObject {
                     self?.handleExtendedInput(gamepad: gamepad, element: element)
                 }
             }
+            
+            // Explicit Home Button handler on ExtendedGamepad (disables macOS system gesture capture)
+            if let home = extended.buttonHome {
+                home.preferredSystemGestureState = .disabled
+                home.valueChangedHandler = { [weak self] (button, value, pressed) in
+                    Task { @MainActor [weak self] in
+                        self?.state.buttonHome.update(pressed: pressed, value: value)
+                        self?.logElementEvent(button)
+                    }
+                }
+                home.pressedChangedHandler = { [weak self] (button, value, pressed) in
+                    Task { @MainActor [weak self] in
+                        self?.state.buttonHome.update(pressed: pressed, value: value)
+                        self?.logElementEvent(button)
+                    }
+                }
+            }
+            
+            // Disable system gestures on Start and Select
+            extended.buttonMenu.preferredSystemGestureState = .disabled
+            extended.buttonOptions?.preferredSystemGestureState = .disabled
+        }
+        
+        // Physical Input Profile for Home and custom buttons
+        for (key, element) in controller.physicalInputProfile.elements {
+            if let btn = element as? GCControllerButtonInput {
+                let nameLower = (element.localizedName ?? key).lowercased()
+                let symLower = (element.sfSymbolsName ?? "").lowercased()
+                if key == GCInputButtonHome || nameLower.contains("home") || symLower.contains("house") || symLower.contains("home") || nameLower.contains("guide") {
+                    btn.preferredSystemGestureState = .disabled
+                    btn.valueChangedHandler = { [weak self] (button, value, pressed) in
+                        Task { @MainActor [weak self] in
+                            self?.state.buttonHome.update(pressed: pressed, value: value)
+                            self?.logElementEvent(button)
+                        }
+                    }
+                    btn.pressedChangedHandler = { [weak self] (button, value, pressed) in
+                        Task { @MainActor [weak self] in
+                            self?.state.buttonHome.update(pressed: pressed, value: value)
+                            self?.logElementEvent(button)
+                        }
+                    }
+                }
+            }
         }
         
         // Physical Input Profile for extra / custom buttons (M1, M2, L4, R4)
@@ -352,8 +381,11 @@ public final class ControllerManager: ObservableObject {
             }
         }
         
-        // Motion handler
-        if let motion = controller.motion {
+        // Motion handler: for non-8BitDo controllers (e.g. DualSense), use Apple GCMotion if present
+        let vendor = controller.vendorName ?? ""
+        let is8BitDo = vendor.localizedCaseInsensitiveContains("8BitDo") || controller.productCategory == "HID"
+        
+        if !is8BitDo, let motion = controller.motion {
             if motion.sensorsRequireManualActivation {
                 motion.sensorsActive = true
             }
@@ -363,163 +395,11 @@ public final class ControllerManager: ObservableObject {
                     self?.handleMotionUpdate(motion)
                 }
             }
-        } else {
-            // Direct native macOS HID 6-axis IMU fallback for 8BitDo (Report ID 1, Bytes 15-26)
-            setupDirectHIDMotion()
-        }
-    }
-    
-    // MARK: - Direct Native macOS USB HID IMU Integration
-    
-    public func setupDirectHIDMotion() {
-        guard !isSimulatedMode else { return }
-        
-        if hidMotionManager == nil {
-            let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-            let matchDict = [
-                kIOHIDVendorIDKey as String: 0x2dc8
-            ] as CFDictionary
-            IOHIDManagerSetDeviceMatching(mgr, matchDict)
-            
-            let context = Unmanaged.passUnretained(self).toOpaque()
-            IOHIDManagerRegisterDeviceMatchingCallback(mgr, { context, result, sender, device in
-                guard let context = context else { return }
-                let selfRef = Unmanaged<ControllerManager>.fromOpaque(context).takeUnretainedValue()
-                selfRef.directHIDDeviceMatched(device)
-            }, context)
-            
-            IOHIDManagerRegisterDeviceRemovalCallback(mgr, { context, result, sender, device in
-                guard let context = context else { return }
-                let selfRef = Unmanaged<ControllerManager>.fromOpaque(context).takeUnretainedValue()
-                selfRef.directHIDDeviceRemoved(device)
-            }, context)
-            
-            IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-            _ = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
-            self.hidMotionManager = mgr
-        }
-        
-        // If device is already present
-        if let mgr = hidMotionManager,
-           let deviceSet = IOHIDManagerCopyDevices(mgr) as? Set<IOHIDDevice>,
-           let dev = deviceSet.first {
-            directHIDDeviceMatched(dev)
-        }
-    }
-    
-    private func directHIDDeviceMatched(_ dev: IOHIDDevice) {
-        if directHIDDevice === dev { return }
-        detachDirectHIDMotion()
-        
-        _ = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
-        self.directHIDDevice = dev
-        let buf = HIDBuffer()
-        self.reportBuffer = buf
-        
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        IOHIDDeviceRegisterInputReportCallback(dev, buf.pointer, 64, { context, result, sender, type, reportID, report, reportLength in
-            guard reportLength >= 27, let context = context else { return }
-            let mgr = Unmanaged<ControllerManager>.fromOpaque(context).takeUnretainedValue()
-            mgr.handleDirectHIDMotionReport(report: report, length: reportLength)
-        }, context)
-        
-        IOHIDDeviceScheduleWithRunLoop(dev, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-        state.motion.hasMotion = true
-    }
-    
-    private func directHIDDeviceRemoved(_ dev: IOHIDDevice) {
-        if directHIDDevice === dev {
-            detachDirectHIDMotion()
         }
     }
     
     public func resetMotionOrientation() {
-        filterYaw = 0.0
-        filterPitch = 0.0
-        filterRoll = 0.0
-        motionReportCount = 0
-    }
-    
-    private func detachDirectHIDMotion() {
-        if let dev = directHIDDevice {
-            IOHIDDeviceUnscheduleFromRunLoop(dev, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-            if let buf = reportBuffer {
-                IOHIDDeviceRegisterInputReportCallback(dev, buf.pointer, 64, nil, nil)
-            }
-            directHIDDevice = nil
-        }
-        reportBuffer = nil
-    }
-    
-    nonisolated private func handleDirectHIDMotionReport(report: UnsafePointer<UInt8>, length: Int) {
-        // 8BitDo 6-axis IMU packet:
-        // Bytes 15-20: Accelerometer X, Y, Z (signed 16-bit little endian, 4096 LSB = 1.0G)
-        // Bytes 21-26: Gyroscope X, Y, Z (signed 16-bit little endian)
-        let rawAx = Int16(bitPattern: UInt16(report[15]) | (UInt16(report[16]) << 8))
-        let rawAy = Int16(bitPattern: UInt16(report[17]) | (UInt16(report[18]) << 8))
-        let rawAz = Int16(bitPattern: UInt16(report[19]) | (UInt16(report[20]) << 8))
-        
-        let ax = Double(rawAx) / 4096.0
-        let ay = Double(rawAy) / 4096.0
-        let az = Double(rawAz) / 4096.0
-        
-        let rawGx = Int16(bitPattern: UInt16(report[21]) | (UInt16(report[22]) << 8))
-        let rawGy = Int16(bitPattern: UInt16(report[23]) | (UInt16(report[24]) << 8))
-        let rawGz = Int16(bitPattern: UInt16(report[25]) | (UInt16(report[26]) << 8))
-        
-        // Convert to rad/s (~16.4 LSB per deg/s = 0.001065 rad/s per LSB)
-        let gx = Double(rawGx) * 0.001065
-        let gy = Double(rawGy) * 0.001065
-        let gz = Double(rawGz) * 0.001065
-        
-        let accelPitch = atan2(ay, sqrt(ax * ax + az * az))
-        let accelRoll = atan2(-ax, az)
-        
-        let now = ProcessInfo.processInfo.systemUptime
-        
-        // User acceleration: subtract gravity vector
-        let mag = sqrt(ax * ax + ay * ay + az * az)
-        let normGx = mag > 0.01 ? (ax / mag) : 0.0
-        let normGy = mag > 0.01 ? (ay / mag) : 0.0
-        let normGz = mag > 0.01 ? (az / mag) : 1.0
-        let uax = ax - normGx
-        let uay = ay - normGy
-        let uaz = az - normGz
-        
-        MainActor.assumeIsolated {
-            guard !self.isSimulatedMode else { return }
-            
-            let dt = (self.lastMotionTimestamp == 0.0) ? 0.016 : min(0.1, max(0.001, now - self.lastMotionTimestamp))
-            self.lastMotionTimestamp = now
-            self.motionReportCount += 1
-            
-            // Sensor fusion complementary filter
-            if self.motionReportCount <= 2 {
-                self.filterPitch = accelPitch
-                self.filterRoll = accelRoll
-            } else {
-                let alpha = 0.92
-                self.filterPitch = alpha * (self.filterPitch + gx * dt) + (1.0 - alpha) * accelPitch
-                self.filterRoll = alpha * (self.filterRoll + gy * dt) + (1.0 - alpha) * accelRoll
-                self.filterYaw += gz * dt
-            }
-            
-            self.state.motion = ControllerMotionState(
-                hasMotion: true,
-                pitch: self.filterPitch,
-                roll: self.filterRoll,
-                yaw: self.filterYaw,
-                rotationRateX: gx,
-                rotationRateY: gy,
-                rotationRateZ: gz,
-                gravityX: ax,
-                gravityY: ay,
-                gravityZ: az,
-                userAccelX: uax,
-                userAccelY: uay,
-                userAccelZ: uaz
-            )
-        }
+        EightBitDoDevice.shared.resetOrientation()
     }
     
     private func handleExtendedInput(gamepad: GCExtendedGamepad, element: GCControllerElement) {
@@ -581,7 +461,24 @@ public final class ControllerManager: ObservableObject {
         guard let btn = element as? GCControllerButtonInput else { return }
         let key = element.localizedName ?? element.sfSymbolsName ?? "Extra Button"
         
-        // Only track if not already one of the standard face/shoulder/dpad buttons
+        // Map specific hardware extra buttons
+        let sym = element.sfSymbolsName?.lowercased() ?? ""
+        let nameLower = key.lowercased()
+        if nameLower.contains("home") || sym.contains("house") || sym.contains("home") || nameLower.contains("guide") {
+            state.buttonHome.update(pressed: btn.isPressed, value: btn.value)
+            logElementEvent(element)
+            return
+        } else if nameLower.contains("m1") || sym.contains("m1") {
+            state.paddle1.update(pressed: btn.isPressed, value: btn.value)
+        } else if nameLower.contains("m2") || sym.contains("m2") {
+            state.paddle2.update(pressed: btn.isPressed, value: btn.value)
+        } else if nameLower.contains("l4") || sym.contains("l4") {
+            state.buttonL4.update(pressed: btn.isPressed, value: btn.value)
+        } else if nameLower.contains("r4") || sym.contains("r4") {
+            state.buttonR4.update(pressed: btn.isPressed, value: btn.value)
+        }
+        
+        // Only track in dynamic list if not already one of the standard face/shoulder/dpad buttons
         if !standardElementKeys.contains(key) {
             state.updateDynamicButton(
                 key: key,
@@ -598,16 +495,18 @@ public final class ControllerManager: ObservableObject {
     private func handleMotionUpdate(_ motion: GCMotion) {
         let q = motion.attitude
         // Euler conversion from quaternion (x, y, z, w)
-        let sinr_cosp = 2 * (q.w * q.x + q.y * q.z)
-        let cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y)
-        let roll = atan2(sinr_cosp, cosr_cosp)
+        // Pitch (tilting controller back / forward around X-axis)
+        let sinPitch = 2 * (q.w * q.x + q.y * q.z)
+        let cosPitch = 1 - 2 * (q.x * q.x + q.y * q.y)
+        let pitch = atan2(sinPitch, cosPitch)
         
-        let sinp = 2 * (q.w * q.y - q.z * q.x)
-        let pitch: Double
-        if abs(sinp) >= 1 {
-            pitch = copysign(.pi / 2, sinp)
+        // Roll (tilting controller left / right around Y-axis)
+        let sinRoll = 2 * (q.w * q.y - q.z * q.x)
+        let roll: Double
+        if abs(sinRoll) >= 1 {
+            roll = copysign(.pi / 2, sinRoll)
         } else {
-            pitch = asin(sinp)
+            roll = asin(sinRoll)
         }
         
         let siny_cosp = 2 * (q.w * q.z + q.x * q.y)

@@ -69,16 +69,20 @@ public final class SimulatedController: ObservableObject {
         state.leftTrigger.update(pressed: lt > 0.1, value: lt)
         state.rightTrigger.update(pressed: rt > 0.1, value: rt)
         
-        // 4. Face buttons periodic activation
-        let modT = Int(t * 2.0) % 8
+        // 4. Face buttons & Bumpers periodic activation
+        let modT = Int(t * 2.0) % 12
         state.buttonA.update(pressed: modT == 0, value: modT == 0 ? 1.0 : 0.0)
         state.buttonB.update(pressed: modT == 1, value: modT == 1 ? 1.0 : 0.0)
         state.buttonX.update(pressed: modT == 2, value: modT == 2 ? 1.0 : 0.0)
         state.buttonY.update(pressed: modT == 3, value: modT == 3 ? 1.0 : 0.0)
         state.leftShoulder.update(pressed: modT == 4, value: modT == 4 ? 1.0 : 0.0)
         state.rightShoulder.update(pressed: modT == 5, value: modT == 5 ? 1.0 : 0.0)
-        state.leftStickButton.update(pressed: modT == 6, value: modT == 6 ? 1.0 : 0.0)
-        state.rightStickButton.update(pressed: modT == 7, value: modT == 7 ? 1.0 : 0.0)
+        state.buttonL4.update(pressed: modT == 6, value: modT == 6 ? 1.0 : 0.0)
+        state.buttonR4.update(pressed: modT == 7, value: modT == 7 ? 1.0 : 0.0)
+        state.leftStickButton.update(pressed: modT == 8, value: modT == 8 ? 1.0 : 0.0)
+        state.rightStickButton.update(pressed: modT == 9, value: modT == 9 ? 1.0 : 0.0)
+        state.paddle1.update(pressed: modT == 10, value: modT == 10 ? 1.0 : 0.0)
+        state.paddle2.update(pressed: modT == 11, value: modT == 11 ? 1.0 : 0.0)
         
         // 5. D-Pad
         let dpadMod = Int(t * 1.5) % 4
@@ -89,21 +93,34 @@ public final class SimulatedController: ObservableObject {
         state.dpadX = dpadMod == 1 ? 1.0 : (dpadMod == 3 ? -1.0 : 0.0)
         state.dpadY = dpadMod == 0 ? 1.0 : (dpadMod == 2 ? -1.0 : 0.0)
         
-        // 6. Motion (Pitch / Roll)
+        // 6. Motion (Pitch / Roll / Yaw & dynamic acceleration)
+        let simPitch = sin(t * 1.0) * 0.45 // in radians (~25°)
+        let simRoll = cos(t * 0.8) * 0.55  // in radians (~31°)
+        let simYaw = sin(t * 0.5) * 0.35   // in radians (~20°)
+        let rotX = cos(t * 1.0) * 0.45 * 45.0 // deg/s
+        let rotY = -sin(t * 0.8) * 0.55 * 45.0 // deg/s
+        let rotZ = cos(t * 0.5) * 0.35 * 45.0 // deg/s
+        let gravX = sin(simRoll) * cos(simPitch)
+        let gravY = -sin(simPitch)
+        let gravZ = -cos(simRoll) * cos(simPitch)
+        let uax = sin(t * 2.5) * 0.25
+        let uay = cos(t * 3.0) * 0.20
+        let uaz = sin(t * 1.8) * 0.15
+        
         state.motion = ControllerMotionState(
             hasMotion: true,
-            pitch: sin(t * 1.0) * 0.4,
-            roll: cos(t * 0.8) * 0.5,
-            yaw: sin(t * 0.5) * 0.3,
-            rotationRateX: cos(t * 1.0) * 0.4,
-            rotationRateY: -sin(t * 0.8) * 0.4,
-            rotationRateZ: cos(t * 0.5) * 0.2,
-            gravityX: sin(t * 0.8) * 0.5,
-            gravityY: sin(t * 1.0) * 0.4,
-            gravityZ: -0.8,
-            userAccelX: 0.0,
-            userAccelY: 0.0,
-            userAccelZ: 0.0
+            pitch: simPitch,
+            roll: simRoll,
+            yaw: simYaw,
+            rotationRateX: rotX * .pi / 180.0,
+            rotationRateY: rotY * .pi / 180.0,
+            rotationRateZ: rotZ * .pi / 180.0,
+            gravityX: gravX,
+            gravityY: gravY,
+            gravityZ: gravZ,
+            userAccelX: uax,
+            userAccelY: uay,
+            userAccelZ: uaz
         )
         
         // Record telemetry and diagnostics

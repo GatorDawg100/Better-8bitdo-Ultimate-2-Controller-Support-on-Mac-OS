@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import DualSenseEmulationKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -14,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         let runInBackground = UserDefaults.standard.object(forKey: "run_in_background") as? Bool ?? true
-        if runInBackground || DualSenseEmulator.shared.isEmulating {
+        if runInBackground {
             return false
         }
         return true

@@ -9,11 +9,23 @@ public struct Motion3DView: View {
         self.onRecalibrate = onRecalibrate
     }
     
+    private var pitchDeg: Double {
+        motion.pitch * 180.0 / .pi
+    }
+    
+    private var rollDeg: Double {
+        motion.roll * 180.0 / .pi
+    }
+    
+    private var yawDeg: Double {
+        motion.yaw * 180.0 / .pi
+    }
+    
     public var body: some View {
         VStack(spacing: 16) {
-            // Header / Availability
+            // Header
             HStack {
-                Text("Controller IMU & Motion Sensors")
+                Text("Controller IMU & 6-Axis Motion")
                     .font(.headline)
                     .fontWeight(.bold)
                 Spacer()
@@ -30,87 +42,114 @@ public struct Motion3DView: View {
                     Circle()
                         .fill(motion.hasMotion ? Color.green : Color.secondary)
                         .frame(width: 8, height: 8)
-                    Text(motion.hasMotion ? "Sensor Streaming (Active)" : "Sensor Inactive / Unsupported")
+                    Text(motion.hasMotion ? "IMU Active (Streaming)" : "Sensor Inactive")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
             
-            HStack(spacing: 20) {
-                // 3D Horizon / Attitude Sphere
+            HStack(spacing: 16) {
+                // 1. Aviation Artificial Horizon Indicator
                 VStack(spacing: 8) {
                     Text("Attitude Horizon")
                         .font(.subheadline)
                         .fontWeight(.semibold)
                     
-                    ZStack {
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.blue.opacity(0.6), Color.brown.opacity(0.6)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .frame(width: 150, height: 150)
-                            .overlay(Circle().stroke(Color.white.opacity(0.4), lineWidth: 2))
-                            // Rotate by roll and offset by pitch
-                            .rotationEffect(.degrees(motion.roll * 180.0 / .pi))
-                            .offset(y: CGFloat(motion.pitch * 30.0))
-                            .clipShape(Circle())
-                        
-                        // Crosshair horizon reticle
-                        Path { path in
-                            path.move(to: CGPoint(x: 20, y: 75))
-                            path.addLine(to: CGPoint(x: 60, y: 75))
-                            path.move(to: CGPoint(x: 90, y: 75))
-                            path.addLine(to: CGPoint(x: 130, y: 75))
-                            path.addEllipse(in: CGRect(x: 72, y: 72, width: 6, height: 6))
-                        }
-                        .stroke(Color.yellow, lineWidth: 2)
+                    ArtificialHorizonGauge(pitchDeg: pitchDeg, rollDeg: rollDeg)
                         .frame(width: 150, height: 150)
-                    }
-                    .frame(width: 150, height: 150)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 2))
                     
-                    VStack(spacing: 3) {
-                        Text("Roll: \(String(format: "%+.1f°", motion.roll * 180.0 / .pi))  |  Pitch: \(String(format: "%+.1f°", motion.pitch * 180.0 / .pi))")
-                        Text("Heading / Yaw: \(String(format: "%+.1f°", motion.yaw * 180.0 / .pi))")
+                    HStack(spacing: 8) {
+                        Text("Roll: \(String(format: "%+.1f°", rollDeg))")
+                        Text("•")
+                        Text("Pitch: \(String(format: "%+.1f°", pitchDeg))")
                     }
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(14)
+                .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color(nsColor: .controlBackgroundColor).opacity(0.6))
                 )
                 
-                // Rotation Rate & Accelerometer Readouts
-                VStack(spacing: 12) {
-                    SensorTelemetryGroup(
-                        title: "Gyroscope (Rotation Rate)",
-                        icon: "gyroscope",
-                        items: [
-                            ("X (Pitch Rate)", String(format: "%+.1f°/s (%+.2f rad/s)", motion.rotationRateX * 180.0 / .pi, motion.rotationRateX)),
-                            ("Y (Roll Rate)", String(format: "%+.1f°/s (%+.2f rad/s)", motion.rotationRateY * 180.0 / .pi, motion.rotationRateY)),
-                            ("Z (Yaw Rate)", String(format: "%+.1f°/s (%+.2f rad/s)", motion.rotationRateZ * 180.0 / .pi, motion.rotationRateZ))
-                        ]
-                    )
+                // 2. Interactive 3D Perspective Orientation Model
+                VStack(spacing: 8) {
+                    Text("3D Orientation Preview")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
                     
-                    SensorTelemetryGroup(
-                        title: "Gravity Vector (g)",
-                        icon: "arrow.down.to.line.compact",
-                        items: [
-                            ("X", String(format: "%+.2f g", motion.gravityX)),
-                            ("Y", String(format: "%+.2f g", motion.gravityY)),
-                            ("Z", String(format: "%+.2f g", motion.gravityZ))
-                        ]
-                    )
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+                        
+                        // 3D Perspective Controller Card
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color.blue.opacity(0.8), Color.purple.opacity(0.8)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .frame(width: 120, height: 80)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(Color.white.opacity(0.5), lineWidth: 1.5)
+                                )
+                                .shadow(color: Color.blue.opacity(0.4), radius: 10, x: 0, y: 5)
+                            
+                            VStack(spacing: 4) {
+                                Image(systemName: "gamecontroller.fill")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(.white)
+                                Text("8BitDo IMU")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
+                        // Apply 3D spatial rotation based on pitch, roll, and yaw
+                        .rotation3DEffect(.degrees(pitchDeg), axis: (x: 1, y: 0, z: 0))
+                        .rotation3DEffect(.degrees(-rollDeg), axis: (x: 0, y: 1, z: 0))
+                        .rotation3DEffect(.degrees(-yawDeg), axis: (x: 0, y: 0, z: 1))
+                    }
+                    .frame(height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    
+                    Text("Yaw / Heading: \(String(format: "%+.1f°", yawDeg))")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.6))
+                )
+            }
+            
+            // Sensor Telemetry Cards
+            HStack(spacing: 16) {
+                SensorTelemetryGroup(
+                    title: "Gyroscope (Rotation Rate)",
+                    icon: "gyroscope",
+                    items: [
+                        ("Pitch Rate", String(format: "%+.1f°/s", motion.rotationRateX * 180.0 / .pi)),
+                        ("Roll Rate", String(format: "%+.1f°/s", motion.rotationRateY * 180.0 / .pi)),
+                        ("Yaw Rate", String(format: "%+.1f°/s", motion.rotationRateZ * 180.0 / .pi))
+                    ]
+                )
+                
+                SensorTelemetryGroup(
+                    title: "Gravity Vector (g)",
+                    icon: "arrow.down.to.line.compact",
+                    items: [
+                        ("Grav X", String(format: "%+.2f g", motion.gravityX)),
+                        ("Grav Y", String(format: "%+.2f g", motion.gravityY)),
+                        ("Grav Z", String(format: "%+.2f g", motion.gravityZ))
+                    ]
+                )
             }
         }
         .padding(16)
@@ -125,6 +164,102 @@ public struct Motion3DView: View {
     }
 }
 
+// MARK: - Aviation Artificial Horizon Gauge
+private struct ArtificialHorizonGauge: View {
+    let pitchDeg: Double
+    let rollDeg: Double
+    
+    var body: some View {
+        ZStack {
+            // Inner Pitch/Roll Disk (300x300 clipped to 150x150)
+            ZStack {
+                // Sky (Top Half)
+                Rectangle()
+                    .fill(Color(red: 0.2, green: 0.55, blue: 0.85))
+                    .frame(width: 300, height: 150)
+                    .offset(y: -75)
+                
+                // Ground (Bottom Half)
+                Rectangle()
+                    .fill(Color(red: 0.45, green: 0.32, blue: 0.20))
+                    .frame(width: 300, height: 150)
+                    .offset(y: 75)
+                
+                // Horizon Line
+                Rectangle()
+                    .fill(Color.white)
+                    .frame(width: 300, height: 2)
+                
+                // Pitch Ladder lines (every 10 degrees, 1° ≈ 1.2 points)
+                VStack(spacing: 24) {
+                    PitchLadderBar(angle: "+20", width: 44)
+                    PitchLadderBar(angle: "+10", width: 30)
+                    Spacer().frame(height: 2)
+                    PitchLadderBar(angle: "-10", width: 30)
+                    PitchLadderBar(angle: "-20", width: 44)
+                }
+            }
+            .frame(width: 300, height: 300)
+            // Pitch translation (clamped)
+            .offset(y: CGFloat(min(50, max(-50, pitchDeg * 1.5))))
+            // Roll rotation
+            .rotationEffect(.degrees(-rollDeg))
+            .frame(width: 150, height: 150)
+            .clipShape(Circle())
+            
+            // Fixed Outer Bezel
+            Circle()
+                .stroke(Color.secondary.opacity(0.4), lineWidth: 2)
+                .frame(width: 150, height: 150)
+            
+            // Fixed Aircraft Center Wings & Reticle (Yellow)
+            HStack(spacing: 24) {
+                // Left Wing
+                Rectangle()
+                    .fill(Color.yellow)
+                    .frame(width: 36, height: 3)
+                
+                // Center pip
+                Circle()
+                    .fill(Color.yellow)
+                    .frame(width: 6, height: 6)
+                
+                // Right Wing
+                Rectangle()
+                    .fill(Color.yellow)
+                    .frame(width: 36, height: 3)
+            }
+            
+            // Top Roll Pointer
+            Image(systemName: "arrowtriangle.down.fill")
+                .font(.system(size: 8))
+                .foregroundColor(.yellow)
+                .offset(y: -68)
+        }
+        .frame(width: 150, height: 150)
+    }
+}
+
+private struct PitchLadderBar: View {
+    let angle: String
+    let width: CGFloat
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(angle)
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+            Rectangle()
+                .fill(Color.white.opacity(0.8))
+                .frame(width: width, height: 1.5)
+            Text(angle)
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+        }
+    }
+}
+
+// MARK: - Sensor Telemetry Group
 private struct SensorTelemetryGroup: View {
     let title: String
     let icon: String
@@ -148,7 +283,7 @@ private struct SensorTelemetryGroup: View {
                             .foregroundColor(.secondary)
                         Text(item.1)
                             .font(.system(.caption, design: .monospaced))
-                            .fontWeight(.medium)
+                            .fontWeight(.bold)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)

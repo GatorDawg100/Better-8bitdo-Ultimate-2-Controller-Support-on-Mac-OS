@@ -13,6 +13,8 @@ public enum EightBitDoButton: String, CaseIterable, Codable, Sendable {
     case rb = "RB"
     case lt = "LT (Digital)"
     case rt = "RT (Digital)"
+    case l4 = "L4"
+    case r4 = "R4"
     
     // Stick Clicks
     case l3 = "L3"

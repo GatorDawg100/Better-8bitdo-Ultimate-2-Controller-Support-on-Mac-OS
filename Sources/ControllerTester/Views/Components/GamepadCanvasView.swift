@@ -26,6 +26,21 @@ public struct GamepadCanvasView: View {
                 
                 // Controller Container scaled and centered
                 ZStack {
+                    // Back Paddles: Left Grip Paddle and Right Grip Paddle
+                    BackPaddleWing(
+                        title: "M1",
+                        isPressed: state.paddle1.isPressed,
+                        isLeft: true
+                    )
+                    .offset(x: -250, y: 130)
+                    
+                    BackPaddleWing(
+                        title: "M2",
+                        isPressed: state.paddle2.isPressed,
+                        isLeft: false
+                    )
+                    .offset(x: 250, y: 130)
+                    
                     // Controller Outer Body Shape
                     ControllerChassisPath()
                         .fill(
@@ -44,7 +59,7 @@ public struct GamepadCanvasView: View {
                         )
                         .shadow(color: Color.black.opacity(0.3), radius: 18, x: 0, y: 10)
                     
-                    // Top Shoulders & Triggers
+                    // Top Shoulders & Triggers (including L4 and R4)
                     ShouldersAndTriggersOverlay(state: state)
                         .offset(y: -140)
                     
@@ -52,41 +67,45 @@ public struct GamepadCanvasView: View {
                     CenterSystemButtons(state: state)
                         .offset(y: -40)
                     
-                    // D-Pad (Left side)
-                    DpadModuleView(state: state)
-                        .offset(x: -150, y: 30)
-                    
-                    // Left Thumbstick
+                    // Left Thumbstick (LS) - Upper-Left position (8BitDo / Xbox Layout)
                     ThumbstickModuleView(
                         title: "LS",
                         stick: state.leftStick,
                         isPressed: state.leftStickButton.isPressed,
                         accentColor: .blue
                     )
-                    .offset(x: -80, y: -30)
+                    .offset(x: -140, y: -25)
                     
-                    // Right Action Buttons (A, B, X, Y)
+                    // D-Pad - Lower-Left position (8BitDo / Xbox Layout)
+                    DpadModuleView(state: state)
+                        .offset(x: -75, y: 45)
+                    
+                    // Right Action Buttons (A, B, X, Y) - Upper-Right position
                     ActionButtonsModuleView(state: state)
-                        .offset(x: 150, y: -30)
+                        .offset(x: 140, y: -25)
                     
-                    // Right Thumbstick
+                    // Right Thumbstick (RS) - Lower-Right position
                     ThumbstickModuleView(
                         title: "RS",
                         stick: state.rightStick,
                         isPressed: state.rightStickButton.isPressed,
                         accentColor: .purple
                     )
-                    .offset(x: 75, y: 40)
+                    .offset(x: 75, y: 45)
                 }
                 .frame(width: 580, height: 380)
                 .scaleEffect(scale)
                 .rotation3DEffect(
-                    .degrees(state.motion.hasMotion ? state.motion.pitch * 180.0 / .pi * 0.25 : 0),
+                    .degrees(state.motion.hasMotion ? (state.motion.pitch * 180.0 / .pi) * 0.3 : 0),
                     axis: (x: 1, y: 0, z: 0)
                 )
                 .rotation3DEffect(
-                    .degrees(state.motion.hasMotion ? -state.motion.roll * 180.0 / .pi * 0.25 : 0),
+                    .degrees(state.motion.hasMotion ? (-state.motion.roll * 180.0 / .pi) * 0.3 : 0),
                     axis: (x: 0, y: 1, z: 0)
+                )
+                .rotation3DEffect(
+                    .degrees(state.motion.hasMotion ? (-state.motion.yaw * 180.0 / .pi) * 0.15 : 0),
+                    axis: (x: 0, y: 0, z: 1)
                 )
                 // Shake effect if vibrating
                 .offset(
@@ -99,11 +118,51 @@ public struct GamepadCanvasView: View {
     }
 }
 
+// MARK: - Back Paddle Wing (M1 & M2)
+private struct BackPaddleWing: View {
+    let title: String
+    let isPressed: Bool
+    let isLeft: Bool
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            if !isLeft {
+                Text(title)
+                    .font(.system(size: 11, weight: .black, design: .rounded))
+                    .foregroundColor(isPressed ? Color.green : Color.secondary)
+            }
+            
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            isPressed ? Color.green : Color(nsColor: .controlBackgroundColor),
+                            isPressed ? Color.green.opacity(0.8) : Color(nsColor: .windowBackgroundColor)
+                        ],
+                        startPoint: isLeft ? .leading : .trailing,
+                        endPoint: isLeft ? .trailing : .leading
+                    )
+                )
+                .frame(width: 20, height: 75)
+                .overlay(
+                    Capsule()
+                        .stroke(isPressed ? Color.green : Color.secondary.opacity(0.4), lineWidth: isPressed ? 2 : 1)
+                )
+                .shadow(color: isPressed ? Color.green.opacity(0.8) : Color.clear, radius: 8)
+            
+            if isLeft {
+                Text(title)
+                    .font(.system(size: 11, weight: .black, design: .rounded))
+                    .foregroundColor(isPressed ? Color.green : Color.secondary)
+            }
+        }
+    }
+}
+
 // MARK: - Controller Chassis Vector Path
 private struct ControllerChassisPath: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        // Normalized coordinate space 580 x 380
         let w = rect.width
         let h = rect.height
         
@@ -149,21 +208,21 @@ private struct ShouldersAndTriggersOverlay: View {
     @ObservedObject var state: GamepadState
     
     var body: some View {
-        HStack(spacing: 80) {
-            // Left Shoulder & Trigger
-            HStack(spacing: 12) {
+        HStack(spacing: 50) {
+            // Left Group: LT (Trigger), LB (Bumper), L4 (Extra Bumper)
+            HStack(spacing: 8) {
                 // LT
                 VStack(spacing: 2) {
                     Text("LT")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.secondary)
                     ZStack(alignment: .bottom) {
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color(nsColor: .controlBackgroundColor))
-                            .frame(width: 44, height: 26)
+                            .frame(width: 40, height: 26)
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color.orange)
-                            .frame(width: 44, height: 26 * CGFloat(state.leftTrigger.value))
+                            .frame(width: 40, height: 26 * CGFloat(state.leftTrigger.value))
                     }
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
@@ -174,32 +233,62 @@ private struct ShouldersAndTriggersOverlay: View {
                 // LB
                 VStack(spacing: 2) {
                     Text("LB")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.secondary)
                     RoundedRectangle(cornerRadius: 6)
                         .fill(state.leftShoulder.isPressed ? Color.blue : Color(nsColor: .controlBackgroundColor))
-                        .frame(width: 48, height: 26)
+                        .frame(width: 42, height: 26)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                .stroke(state.leftShoulder.isPressed ? Color.blue : Color.secondary.opacity(0.3), lineWidth: 1)
                         )
                         .shadow(color: state.leftShoulder.isPressed ? Color.blue.opacity(0.7) : .clear, radius: 4)
                 }
+                
+                // L4 (Extra Bumper Button)
+                VStack(spacing: 2) {
+                    Text("L4")
+                        .font(.system(size: 10, weight: .heavy))
+                        .foregroundColor(state.buttonL4.isPressed ? Color.cyan : Color.secondary)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(state.buttonL4.isPressed ? Color.cyan : Color(nsColor: .controlBackgroundColor))
+                        .frame(width: 34, height: 26)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(state.buttonL4.isPressed ? Color.cyan : Color.secondary.opacity(0.3), lineWidth: 1.5)
+                        )
+                        .shadow(color: state.buttonL4.isPressed ? Color.cyan.opacity(0.8) : .clear, radius: 6)
+                }
             }
             
-            // Right Shoulder & Trigger
-            HStack(spacing: 12) {
+            // Right Group: R4 (Extra Bumper), RB (Bumper), RT (Trigger)
+            HStack(spacing: 8) {
+                // R4 (Extra Bumper Button)
+                VStack(spacing: 2) {
+                    Text("R4")
+                        .font(.system(size: 10, weight: .heavy))
+                        .foregroundColor(state.buttonR4.isPressed ? Color.cyan : Color.secondary)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(state.buttonR4.isPressed ? Color.cyan : Color(nsColor: .controlBackgroundColor))
+                        .frame(width: 34, height: 26)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(state.buttonR4.isPressed ? Color.cyan : Color.secondary.opacity(0.3), lineWidth: 1.5)
+                        )
+                        .shadow(color: state.buttonR4.isPressed ? Color.cyan.opacity(0.8) : .clear, radius: 6)
+                }
+                
                 // RB
                 VStack(spacing: 2) {
                     Text("RB")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.secondary)
                     RoundedRectangle(cornerRadius: 6)
                         .fill(state.rightShoulder.isPressed ? Color.blue : Color(nsColor: .controlBackgroundColor))
-                        .frame(width: 48, height: 26)
+                        .frame(width: 42, height: 26)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                .stroke(state.rightShoulder.isPressed ? Color.blue : Color.secondary.opacity(0.3), lineWidth: 1)
                         )
                         .shadow(color: state.rightShoulder.isPressed ? Color.blue.opacity(0.7) : .clear, radius: 4)
                 }
@@ -207,15 +296,15 @@ private struct ShouldersAndTriggersOverlay: View {
                 // RT
                 VStack(spacing: 2) {
                     Text("RT")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.secondary)
                     ZStack(alignment: .bottom) {
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color(nsColor: .controlBackgroundColor))
-                            .frame(width: 44, height: 26)
+                            .frame(width: 40, height: 26)
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color.orange)
-                            .frame(width: 44, height: 26 * CGFloat(state.rightTrigger.value))
+                            .frame(width: 40, height: 26 * CGFloat(state.rightTrigger.value))
                     }
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
@@ -234,7 +323,7 @@ private struct CenterSystemButtons: View {
     var body: some View {
         HStack(spacing: 24) {
             // Options / Select / Share
-            SystemButtonIndicator(title: "SHARE", isPressed: state.buttonOptions.isPressed)
+            SystemButtonIndicator(title: "SELECT", isPressed: state.buttonOptions.isPressed)
             
             // Home / PS / Xbox Guide
             Circle()
@@ -249,7 +338,7 @@ private struct CenterSystemButtons: View {
                 .shadow(color: state.buttonHome.isPressed ? Color.white.opacity(0.8) : .clear, radius: 6)
             
             // Menu / Start
-            SystemButtonIndicator(title: "MENU", isPressed: state.buttonMenu.isPressed)
+            SystemButtonIndicator(title: "START", isPressed: state.buttonMenu.isPressed)
         }
     }
 }
@@ -261,7 +350,7 @@ private struct SystemButtonIndicator: View {
     var body: some View {
         Capsule()
             .fill(isPressed ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
-            .frame(width: 38, height: 18)
+            .frame(width: 44, height: 18)
             .overlay(
                 Text(title)
                     .font(.system(size: 8, weight: .bold))
@@ -280,21 +369,21 @@ private struct DpadModuleView: View {
             // D-Pad Cross Background
             CrossShape()
                 .fill(Color(nsColor: .controlBackgroundColor))
-                .frame(width: 90, height: 90)
+                .frame(width: 86, height: 86)
                 .overlay(CrossShape().stroke(Color.secondary.opacity(0.3), lineWidth: 1.5))
             
             // Up
             DpadDirectionButton(icon: "arrowtriangle.up.fill", isPressed: state.dpadUp.isPressed)
-                .offset(y: -28)
+                .offset(y: -26)
             // Down
             DpadDirectionButton(icon: "arrowtriangle.down.fill", isPressed: state.dpadDown.isPressed)
-                .offset(y: 28)
+                .offset(y: 26)
             // Left
             DpadDirectionButton(icon: "arrowtriangle.left.fill", isPressed: state.dpadLeft.isPressed)
-                .offset(x: -28)
+                .offset(x: -26)
             // Right
             DpadDirectionButton(icon: "arrowtriangle.right.fill", isPressed: state.dpadRight.isPressed)
-                .offset(x: 28)
+                .offset(x: 26)
         }
     }
 }
@@ -305,9 +394,9 @@ private struct DpadDirectionButton: View {
     
     var body: some View {
         Image(systemName: icon)
-            .font(.system(size: 13))
+            .font(.system(size: 12))
             .foregroundColor(isPressed ? Color.white : Color.secondary)
-            .frame(width: 24, height: 24)
+            .frame(width: 22, height: 22)
             .background(isPressed ? Color.blue : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .shadow(color: isPressed ? Color.blue.opacity(0.8) : .clear, radius: 4)
@@ -346,20 +435,20 @@ private struct ActionButtonsModuleView: View {
         ZStack {
             Circle()
                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.4))
-                .frame(width: 100, height: 100)
+                .frame(width: 96, height: 96)
             
             // Y button (Top)
             ActionButtonView(label: "Y", sublabel: "▲", color: Color.yellow, isPressed: state.buttonY.isPressed)
-                .offset(y: -30)
+                .offset(y: -28)
             // A button (Bottom)
             ActionButtonView(label: "A", sublabel: "✖", color: Color.green, isPressed: state.buttonA.isPressed)
-                .offset(y: 30)
+                .offset(y: 28)
             // X button (Left)
             ActionButtonView(label: "X", sublabel: "■", color: Color.blue, isPressed: state.buttonX.isPressed)
-                .offset(x: -30)
+                .offset(x: -28)
             // B button (Right)
             ActionButtonView(label: "B", sublabel: "●", color: Color.red, isPressed: state.buttonB.isPressed)
-                .offset(x: 30)
+                .offset(x: 28)
         }
     }
 }
@@ -374,18 +463,16 @@ private struct ActionButtonView: View {
         ZStack {
             Circle()
                 .fill(isPressed ? color : Color(nsColor: .controlBackgroundColor))
-                .frame(width: 32, height: 32)
+                .frame(width: 30, height: 30)
                 .overlay(
                     Circle()
                         .stroke(color.opacity(isPressed ? 1.0 : 0.6), lineWidth: isPressed ? 2.5 : 1.5)
                 )
                 .shadow(color: isPressed ? color.opacity(0.8) : .clear, radius: 8)
             
-            VStack(spacing: -2) {
-                Text(label)
-                    .font(.system(size: 13, weight: .heavy, design: .rounded))
-                    .foregroundColor(isPressed ? Color.white : color)
-            }
+            Text(label)
+                .font(.system(size: 13, weight: .heavy, design: .rounded))
+                .foregroundColor(isPressed ? Color.white : color)
         }
     }
 }
@@ -406,8 +493,8 @@ private struct ThumbstickModuleView: View {
                 .overlay(Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 1.5))
             
             // Inner Stick Top Nub
-            let offsetX = CGFloat(stick.x) * 20.0
-            let offsetY = -CGFloat(stick.y) * 20.0 // invert Y
+            let offsetX = CGFloat(stick.x) * 18.0
+            let offsetY = -CGFloat(stick.y) * 18.0 // invert Y
             
             Circle()
                 .fill(

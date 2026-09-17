@@ -2,9 +2,8 @@ import Foundation
 import AppKit
 import Combine
 import EightBitDoKit
-import DualSenseEmulationKit
 
-/// Manages the macOS system menu bar icon for background DualSense emulation and quick controls.
+/// Manages the macOS system menu bar icon for quick status and window controls.
 @MainActor
 public final class MenuBarManager: NSObject {
     public static let shared = MenuBarManager()
@@ -26,28 +25,13 @@ public final class MenuBarManager: NSObject {
         
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "gamecontroller.fill", accessibilityDescription: "8BitDo DS5 Controller")
+            button.image = NSImage(systemSymbolName: "gamecontroller.fill", accessibilityDescription: "8BitDo Controller Tester")
             button.imagePosition = .imageLeft
         }
         
         self.statusItem = item
         updateMenu()
         
-        // Listen to emulator changes
-        DualSenseEmulator.shared.$isEmulating
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.updateMenu()
-            }
-            .store(in: &cancellables)
-            
-        DualSenseEmulator.shared.$packetRateHz
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.updateMenu()
-            }
-            .store(in: &cancellables)
-            
         EightBitDoDevice.shared.$isConnected
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -66,60 +50,25 @@ public final class MenuBarManager: NSObject {
         // 1. Device Status
         let isConnected = EightBitDoDevice.shared.isConnected
         let deviceItem = NSMenuItem(
-            title: isConnected ? "● 8BitDo Ultimate 2: Connected (D-Input)" : "○ 8BitDo Ultimate 2: Disconnected",
+            title: isConnected ? "● 8BitDo Ultimate 2: Connected" : "○ 8BitDo Ultimate 2: Disconnected",
             action: nil,
             keyEquivalent: ""
         )
         deviceItem.isEnabled = false
         menu.addItem(deviceItem)
         
-        // 2. Emulation Status
-        let isEmulating = DualSenseEmulator.shared.isEmulating
-        let hz = Int(DualSenseEmulator.shared.packetRateHz)
-        let emuTitle = isEmulating ? "● DS5 Emulation: Active (\(hz) Hz)" : "○ DS5 Emulation: Inactive"
-        let emuStatusItem = NSMenuItem(title: emuTitle, action: nil, keyEquivalent: "")
-        emuStatusItem.isEnabled = false
-        menu.addItem(emuStatusItem)
-        
         menu.addItem(NSMenuItem.separator())
         
-        // 3. Emulation Toggle Button
-        let toggleItem = NSMenuItem(
-            title: isEmulating ? "Stop DS5 Emulation" : "Start DS5 Emulation",
-            action: #selector(toggleEmulationAction),
-            keyEquivalent: "e"
-        )
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-        
-        // 4. Active Profile Submenu
-        let profileSubmenu = NSMenu()
-        let activeProfile = DualSenseEmulator.shared.activeProfile
-        for profile in DualSenseEmulator.shared.savedProfiles {
-            let item = NSMenuItem(title: profile.name, action: #selector(selectProfileAction(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = profile
-            if profile.id == activeProfile.id {
-                item.state = .on
-            }
-            profileSubmenu.addItem(item)
-        }
-        let profileMenuItem = NSMenuItem(title: "Profile: \(activeProfile.name)", action: nil, keyEquivalent: "")
-        profileMenuItem.submenu = profileSubmenu
-        menu.addItem(profileMenuItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        // 5. Open Window
+        // 2. Open Window
         let showWindowItem = NSMenuItem(
-            title: "Open Controller Tester & Remapper...",
+            title: "Open Controller Tester...",
             action: #selector(showMainWindowAction),
             keyEquivalent: "o"
         )
         showWindowItem.target = self
         menu.addItem(showWindowItem)
         
-        // 6. Run in Background Toggle
+        // 3. Run in Background Toggle
         let runInBackground = UserDefaults.standard.object(forKey: "run_in_background") as? Bool ?? true
         let bgItem = NSMenuItem(
             title: "Keep Running in Background on Close",
@@ -132,28 +81,12 @@ public final class MenuBarManager: NSObject {
         
         menu.addItem(NSMenuItem.separator())
         
-        // 7. Quit
+        // 4. Quit
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitAction), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         
         statusItem?.menu = menu
-        
-        // Update menu bar title badge
-        if let button = statusItem?.button {
-            button.title = isEmulating ? " DS5" : ""
-        }
-    }
-    
-    @objc private func toggleEmulationAction() {
-        DualSenseEmulator.shared.toggleEmulation()
-    }
-    
-    @objc private func selectProfileAction(_ sender: NSMenuItem) {
-        if let profile = sender.representedObject as? RemappingProfile {
-            DualSenseEmulator.shared.setProfile(profile)
-            updateMenu()
-        }
     }
     
     @objc private func showMainWindowAction() {
@@ -171,7 +104,6 @@ public final class MenuBarManager: NSObject {
     }
     
     @objc private func quitAction() {
-        DualSenseEmulator.shared.stopEmulation()
         NSApplication.shared.terminate(nil)
     }
 }

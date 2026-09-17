@@ -47,18 +47,6 @@ public struct HapticsTesterView: View {
             
             Divider()
             
-            // Unified Vibration Notice
-            HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .foregroundColor(.accentColor)
-                Text("Unified Rumble: Vibrates both left and right motors simultaneously across the whole controller.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .padding(8)
-            .background(Color.secondary.opacity(0.08))
-            .cornerRadius(8)
-            
             // Sliders for Intensity & Sharpness
             VStack(spacing: 12) {
                 HStack {

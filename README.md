@@ -1,35 +1,25 @@
-# Better 8BitDo Ultimate 2 Support & DualSense 5 Emulation on macOS
+# ControllerTester & EightBitDoKit
 
-A native macOS userspace driver and PlayStation DualSense 5 (DS5) emulation suite written in **Swift 6** and **SwiftUI**.
+A native macOS application and Swift library designed for deep controller diagnostics, and for unlocking the complete hardware capabilities of the **8BitDo Ultimate 2 Wireless Controller** by communicating directly via macOS IOKit—completely bypassing Apple's GameController framework limitations.
 
-This project provides complete, first-class hardware support for the **8BitDo Ultimate 2 Wireless Controller** (2.4G D-Input mode) on macOS, unlocking full 500 Hz polling, 6-axis gyroscope motion aiming, physical back grip paddles (M1 & M2), and force-feedback motor rumble. By translating raw 8BitDo input reports into a virtual **Sony DualSense 5 (DS5)** controller, games that previously refused to work with third-party controllers will now detect an authentic first-party PlayStation gamepad with 100% compatibility.
-
----
-
-## The Problem: Why This Exists
-
-macOS has notoriously fragmented support for third-party gamepads:
-
-1. **Broken Game Compatibility**: Many games on macOS (including native Mac ports like *Valheim*, *Death Stranding*, *Resident Evil*, as well as Steam games and emulators like *RPCS3*, *Ryujinx*, and *Dolphin*) have poor or nonexistent detection for third-party D-Input/X-Input gamepads. Often, the 8BitDo controller is either completely ignored or only partially recognized with missing axes.
-2. **The "Switch Mode" Compromise**: Previously, the only workaround on Mac was switching the controller into Nintendo Switch mode. However, Switch mode sacrifices analog triggers (converting them into digital on/off switches), scrambles the face button layout, disables rumble on many titles, and adds noticeable input latency.
-3. **Apple's GameController Limitations**: Apple's native `GameController.framework` completely ignores the 8BitDo's 6-axis gyroscope IMU and leaves the physical back grip paddles (M1 and M2) entirely inaccessible.
-4. **Missing Touchpad Button**: Many modern console ports require clicking the PlayStation Touchpad to open the map, inventory, or journal. Standard controllers lack this input, leaving players unable to perform critical in-game actions.
-
-### The Solution: 8BitDo D-Input to DualSense 5 Emulation
-
-Apple includes first-party, kernel-level drivers for the **Sony PlayStation DualSense 5** controller across macOS Sonoma, Sequoia, and macOS 26+. 
-
-By running our lightweight userspace driver:
-- Your 8BitDo Ultimate 2 (in 2.4G D-Input mode) is read directly via IOKit USB HID at **500 Hz**.
-- The raw inputs are packaged into a virtual **Sony DualSense (VID `0x054C`, PID `0x0CE6`)** controller.
-- Games see a genuine DualSense controller with full native support.
-- **Back Paddle M1** maps to the **PS5 Touchpad Click**, giving you an immediate hardware button for in-game maps and menus!
-- **Rumble Loopback**: Vibration commands sent by games to the virtual DualSense are captured and played back through the physical 8BitDo grip motors.
-- **6-Axis Gyroscope Aiming**: Real-time roll, pitch, and yaw are decoded and streamed to the virtual controller for full motion aiming in emulators and Steam.
+Written in **Swift 6** and **SwiftUI**.
 
 ---
 
-## Architecture
+## The Problem: Apple's GameController Limitations
+
+When connecting the **8BitDo Ultimate 2 Wireless Controller** to a Mac in 2.4G D-Input mode (`VID 0x2DC8, PID 0x6012`), Apple's native `GameController.framework`:
+
+1. **Ignores the 6-Axis Gyroscope**: Apple classifies the device as a generic `HID` controller. Because generic HID descriptors lack a standardized schema for 6-axis IMU sensors, Apple sets `controller.motion = nil`. Gyro aiming and motion telemetry are completely disabled.
+2. **Hides the Back Grip Paddles (M1 & M2)**: Apple's standard gamepad profiles do not expose the physical back paddles.
+3. **Disables Force-Feedback Vibration**: Generic HID profiles do not provide bidirectional actuator rumble dispatch.
+4. **The Switch Mode Compromise**: Switching the controller to Nintendo Switch mode enables the gyro through Apple's Switch Pro driver, but it converts analog triggers into digital on/off switches, scrambles face button mappings (swapping A/B and X/Y), and adds input latency.
+
+---
+
+## The Solution: EightBitDoKit
+
+`EightBitDoKit` communicates directly with the controller at the IOKit kernel/userspace boundary via `IOHIDManager`:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -37,135 +27,192 @@ By running our lightweight userspace driver:
 │             Mode Switch: "D" (2.4G D-Input)                  │
 │                VID 0x2DC8 • PID 0x6012                       │
 └──────────────────────────────┬───────────────────────────────┘
-                               │ 34-byte Report ID 1 (500 Hz)
+                               │ 34-byte Raw HID Reports (500 Hz)
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                        EightBitDoKit                         │
-│ • IOHIDManager userspace driver (dedicated queue)            │
-│ • Sub-millisecond thumbstick & trigger decoding              │
-│ • Hardware Back Paddles (M1 & M2) decoded from Byte 10       │
+│ • IOHIDManager userspace driver (dedicated high-priority Q)  │
+│ • Sub-millisecond thumbstick & linear analog trigger parsing │
+│ • Physical Back Paddles (M1 & M2) decoded from Byte 10       │
 │ • 6-Axis IMU complementary orientation filter (α = 0.98)     │
-│ • Direct Output Report ID 5 rumble motor dispatcher          │
+│ • Direct Output Report ID 5 force-feedback rumble dispatcher │
 └──────────────────────────────┬───────────────────────────────┘
                                │ EightBitDoState
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                    DualSenseEmulationKit                     │
-│ • Interactive remapping matrix (M1 → PS5 Touchpad Click)     │
-│ • Stick deadzones & instant Hair Trigger curves              │
-│ • 64-byte USB DualSense Input Report packer                  │
-│ • Virtual Device Actor (CoreHID / IOKit fallback)            │
-│ • DualSense Report 2 rumble loopback to 8BitDo motors        │
-└──────────────────────────────┬───────────────────────────────┘
-                               │ Virtual Sony DualSense (0x054C/0x0CE6)
-                               ▼
-┌──────────────────────────────────────────────────────────────┐
-│                  macOS Games & Applications                  │
-│   Steam • Valheim • RPCS3 • Ryujinx • Apple Arcade • Crossover│
+│               ControllerTester App / Your App                │
+│    Sticks & Drift • Triggers • Motion • Haptics • Logging    │
 └──────────────────────────────────────────────────────────────┘
+```
+
+* **500 Hz High-Speed Polling**: Reads sub-millisecond state updates without driver overhead.
+* **Full 6-Axis IMU Sensor Fusion**: Decodes real-time angular velocity (deg/s), acceleration ($g$), gravity vector, and filtered attitude (pitch, roll, yaw).
+* **Hardware Back Paddles (M1 & M2)**: Decodes the physical grip paddles directly from byte 10.
+* **Full Linear Analog Triggers**: True 8-bit analog resolution ($0.0$ to $1.0$).
+* **Direct Rumble Motor Output**: Sends raw Output Report ID 5 packets to drive the heavy and light rumble motors.
+
+---
+
+## Controller Tester Diagnostic Suite
+
+`ControllerTester` is a modular diagnostic app for macOS:
+
+* **🎮 Gamepad Overview**: Live vector gamepad canvas displaying real-time button actuations, analog sticks, D-pad, bumpers, triggers, back paddles, and tactile vibration shake.
+* **🕹️ Sticks & Drift**:
+  * Polar coordinate radar with concentric deadzone rings.
+  * Resting drift offset calculation and maximum rest deviation tracking.
+  * **360° Circularity Error Benchmark (72-bin gate profiling)** with completion percentage and average error calculation.
+* **⚡ Triggers & Buttons**:
+  * Analog trigger depth gauges ($0.000$ to $1.000$) with actuation visualizers.
+  * Switch health matrix tracking total press counters and hold duration timers (ms) to detect contact bounce or sticky switches.
+* **🧭 Motion & Sensors**:
+  * 3D Artificial Horizon ball reflecting real-time pitch, roll, and yaw.
+  * Angular velocity dials (deg/s) and gravity acceleration meters.
+  * One-click orientation recalibration.
+* **📳 Haptics**:
+  * Dual-motor rumble testing (low-frequency heavy motor and high-frequency light motor).
+  * Preset waveform patterns (Heartbeat, Pulse, Rumble Wave) and emergency stop.
+* **📋 Event Log**:
+  * High-speed chronological input log with category filtering (Buttons, Sticks, Triggers, D-Pad).
+  * Search filtering and one-click JSON/text clipboard export.
+* **🖥️ Menu Bar & Virtual Simulator**:
+  * Runs quietly in the macOS menu bar (`NSStatusItem`) with live connection status.
+  * 60 Hz Virtual Demo Controller mode for exploring diagnostics without physical hardware.
+
+---
+
+## Using EightBitDoKit in Your Own Swift Project
+
+Add `EightBitDoKit` to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(path: "../controller") // or git repository URL
+],
+targets: [
+    .target(
+        name: "MyGameOrApp",
+        dependencies: ["EightBitDoKit"]
+    )
+]
+```
+
+### Swift Usage Example
+
+```swift
+import EightBitDoKit
+import Combine
+
+// 1. Initialize and start the driver
+let device = EightBitDoDevice.shared
+device.start()
+
+// 2. Observe connection lifecycle
+device.onConnectionChanged = { isConnected in
+    print("8BitDo Controller Connected: \(isConnected)")
+}
+
+// 3. Listen to high-frequency state updates (500 Hz)
+device.onStateChanged = { state in
+    // Analog Thumbsticks (-1.0 ... 1.0)
+    let lx = state.leftStick.x
+    let ly = state.leftStick.y
+    let rx = state.rightStick.x
+    let ry = state.rightStick.y
+    
+    // Analog Triggers (0.0 ... 1.0 linear resolution)
+    let lt = state.leftTrigger
+    let rt = state.rightTrigger
+    
+    // Face Buttons & D-Pad
+    let isAPressed = state.buttonA
+    let isBPressed = state.isPressed(.b)
+    let isUpPressed = state.dpadUp
+    
+    // System Buttons (Unintercepted Home / Guide button!)
+    let isHomePressed = state.buttonHome
+    let isSelectPressed = state.buttonSelect
+    let isStartPressed = state.buttonStart
+    
+    // Hardware Back Paddles (M1 & M2)
+    if state.paddleM1 {
+        print("Left grip paddle M1 active")
+    }
+    if state.paddleM2 {
+        print("Right grip paddle M2 active")
+    }
+    
+    // Extra Bumper Buttons (L4 & R4)
+    if state.buttonL4 {
+        print("Extra bumper L4 active")
+    }
+    if state.buttonR4 {
+        print("Extra bumper R4 active")
+    }
+    
+    // 6-Axis Motion Sensor Fusion (IMU)
+    let pitchDeg = state.pitch // filtered pitch in degrees
+    let rollDeg  = state.roll  // filtered roll in degrees
+    let yawDeg   = state.yaw   // accumulated yaw in degrees
+    
+    // Raw angular velocity (deg/s) and gravity acceleration (g)
+    let rot = state.angularVelocityDeg // SIMD3<Float> (X, Y, Z) in °/s
+    let acc = state.acceleration       // SIMD3<Float> in g (~1.0g resting)
+}
+
+// 4. Combine Publisher alternative (for SwiftUI or Reactive Pipelines)
+var cancellables = Set<AnyCancellable>()
+device.$state
+    .receive(on: DispatchQueue.main)
+    .sink { state in
+        // Updates synchronized with view hierarchy
+    }
+    .store(in: &cancellables)
+
+// 5. Trigger Dual-Motor Force-Feedback Rumble
+// Heavy (low-frequency) motor at 80%, light (high-frequency) motor at 40% for 0.35s
+device.sendRumble(lowFrequency: 0.8, highFrequency: 0.4, duration: 0.35)
+
+// Continuous rumble until stopped
+device.sendRumble(lowFrequency: 0.6, highFrequency: 0.6)
+// Stop rumble
+device.stopRumble()
+
+// 6. Recalibrate IMU Orientation Neutral
+device.resetOrientation()
 ```
 
 ---
 
-## Key Features
+## SDL2 / SDL3 Native Support
 
-- **🎮 DualSense 5 Emulation**: Converts 8BitDo D-Input packets into virtual DualSense reports with sub-2.0 ms latency.
-- **🎛️ Back Paddle Customization**:
-  - **Paddle M1 (Left Grip)**: Defaults to **PS5 Touchpad Click** (opens map/inventory in *Valheim*, *Elden Ring*, *Ghost of Tsushima*).
-  - **Paddle M2 (Right Grip)**: Defaults to **L3 (Sprint)** to prevent thumbstick wear.
-  - Can be remapped to any controller input.
-- **🎯 Analog Stick & Trigger Tuning**:
-  - Configurable inner deadzones for Left and Right thumbsticks.
-  - **Hair Trigger Mode**: Instantly activates 100% digital trigger pull at 5% physical travel for competitive shooters.
-- **🧭 6-Axis Gyro Aiming**: Streams real-time gyro and accelerometer telemetry with sensitivity multipliers ($0.5\times$ to $3.0\times$) and axis inversion options.
-- **📳 Force-Feedback Rumble Loopback**: Translates in-game DualSense motor vibration directly to the 8BitDo physical rumble motors.
-- **🖥️ Menu Bar & Background Mode**:
-  - Runs in the macOS menu bar (`NSStatusItem`) with live connection and polling rate indicators.
-  - Keeps emulating in the background when the app window is closed.
-- **🕹️ Comprehensive Diagnostic Suite**:
-  - Real-time vector gamepad visualizer with sub-millisecond feedback.
-  - 72-bin circular perimeter drift and gate accuracy radar.
-  - Switch actuation matrix recording click counts and hold durations (ms).
-  - 3D Artificial Horizon ball for motion attitude visualization.
-  - 60 Hz Virtual Demo Controller mode when no physical hardware is plugged in.
-
----
-
----
-
-## Can You Emulate a First-Party Controller on macOS? The Technical Reality
-
-A central question for macOS gamers and developers is: **Can an application create a virtual first-party controller (such as a Sony DualSense 5 or Xbox Wireless Controller) purely in software on macOS?**
-
-The answer depends entirely on your macOS security configuration:
-
-### 1. On Stock macOS (Default Security, SIP & AMFI Enabled): **NO (Without Apple Approval)**
-For an ad-hoc or self-signed application distributed to end users, **it is currently impossible to create a virtual HID gamepad on stock macOS**.
-* **Why Accessibility Permissions Are Not Enough**: Standard macOS permissions granted in *System Settings > Privacy & Security* (Accessibility, Input Monitoring) only allow user-level synthetic events (e.g. keyboard keystrokes and mouse clicks via `CGEventPost`). They do **not** permit creating virtual HID hardware peripherals.
-* **The Kernel Entitlement Barrier**: When an app attempts to instantiate a virtual controller via `IOHIDUserDeviceCreateWithProperties` (IOKit) or `CoreHID.HIDVirtualDevice` (macOS 15 Sequoia+), the kernel's `IOHIDResourceDeviceUserClient` requires the private entitlement:
-  ```xml
-  <key>com.apple.developer.hid.virtual.device</key>
-  <true/>
-  ```
-* **The AMFI Enforcer**:
-  - If an app attempts to call the API without this entitlement, the kernel returns `kIOReturnNotPermitted (0xe00002c2)`.
-  - If an ad-hoc app embeds this entitlement without an official provisioning profile signed by Apple, macOS **AMFI (Apple Mobile File Integrity)** immediately terminates the process with `SIGKILL` (exit code 137).
-* **Industry Impact**: This is the exact technical wall that prevents major game streaming software (like **Sunshine / Moonlight**) and input remapping tools (like **Karabiner-Elements**) from emulating virtual gamepads on macOS.
-
----
-
-### 2. When IS First-Party Controller Emulation Possible?
-
-There are currently only three pathways to achieve true system-level virtual controller emulation on macOS:
-
-| Method | Security Level | Requirements | Viability |
-| :--- | :--- | :--- | :--- |
-| **A. Apple Developer Program + Capability Grant** | Stock macOS (Full Security) | Paid Apple Developer Account ($99/year) + Apple capability approval | **Official / Production** (App is signed with official Apple Provisioning Profile) |
-| **B. DriverKit System Extension (`dext`)** | Stock macOS (Full Security) | Apple DriverKit HID Family entitlement approval | **Enterprise / Commercial** (Requires Apple vetting) |
-| **C. Disabling AMFI in Recovery Mode** | Reduced Security | Boot into Recovery Mode (`csrutil disable` & `amfi_get_out_of_my_way=1`) | **Power Users / Internal Devs** (Allows ad-hoc `IOHIDUserDevice`) |
-| **D. Physical Hardware Spoofing (USB Adapter)** | Stock macOS (Full Security) | $4 Raspberry Pi Pico running GP2040-CE or Titan/Brook USB adapter | **100% Plug-and-Play** (macOS sees genuine physical USB hardware) |
-
-*The emulation engine in this repository (`DualSenseEmulationKit`) is fully implemented and operational out of the box whenever run under Method A or Method C.*
-
----
-
-### 3. Native Game Configuration (Steam & SDL2 / SDL3)
-
-For games and emulators that do not rely strictly on first-party controller identifiers, you can enable native support for the 8BitDo Ultimate 2 (in 2.4G D-Input mode) using SDL's mapping database:
+For games and emulators built with SDL2/SDL3 (such as *Hollow Knight*, *Dead Cells*, *Celeste*, and emulators like *RPCS3*, *Ryujinx*, and *Dolphin*), you can inject the hardware mapping into your environment:
 
 ```bash
 ./scripts/setup_sdl_controller.sh
 ```
 
-This exports the hardware GUID mapping into `SDL_GAMECONTROLLERCONFIG` in `~/.zshrc`. Every SDL2/SDL3 game (such as *Hollow Knight*, *Dead Cells*, *Celeste*, and emulators like *RPCS3*, *Ryujinx*, and *Dolphin*) will immediately detect the controller natively.
+This registers the 8BitDo Ultimate 2's hardware GUID into `SDL_GAMECONTROLLERCONFIG` in `~/.zshrc`.
 
 ---
 
-## Running from the Command Line
+## Building and Running
 
-You can run, test, and launch the project entirely from the terminal:
-
-### Run Directly with Swift PM (Debug Mode)
+### Run the App in Development
 ```bash
 swift run ControllerTester
 ```
 
-### Run the Packaged Binary Directly
-```bash
-./ControllerTester.app/Contents/MacOS/ControllerTester
-```
-
-### Launch the App via macOS `open`
-```bash
-open ControllerTester.app
-```
-
 ### Run the Automated Unit Test Suite
-To verify `EightBitDoKit`, `DualSenseEmulationKit`, and the controller state models:
 ```bash
 swift test
 ```
-*Expected output: All 7 test suites pass in < 0.01 seconds.*
+
+### Build the Standalone macOS App (`.app`)
+```bash
+./scripts/build_app.sh
+open ControllerTester.app
+```
 
 ---
 
@@ -173,52 +220,43 @@ swift test
 
 ```
 controller/
-├── Package.swift                             # SPM Manifest (Swift 6 / macOS 14+)
-├── ControllerTester.app                      # Packaged macOS Application Bundle
+├── Package.swift                             # Swift Package Manager manifest
+├── ControllerTester.app                      # Packaged standalone macOS application
 ├── scripts/
-│   ├── build_app.sh                          # App bundle release compilation script
-│   └── setup_sdl_controller.sh               # Injects SDL_GAMECONTROLLERCONFIG for Steam & SDL2
+│   ├── build_app.sh                          # App bundle packaging script
+│   └── setup_sdl_controller.sh               # SDL2/SDL3 game controller mapping
 ├── Sources/
-│   ├── EightBitDoKit/                        # Modular 8BitDo userspace driver library
-│   │   ├── EightBitDoConstants.swift         # VID 0x2DC8, PID 0x6012, Report IDs & scales
-│   │   ├── EightBitDoButton.swift            # Physical input enum including paddles M1 & M2
-│   │   ├── EightBitDoState.swift             # Instantaneous controller snapshot & IMU telemetry
-│   │   ├── EightBitDoPacketDecoder.swift     # 500 Hz 34-byte decoder + complementary filter
-│   │   └── EightBitDoDevice.swift            # IOHIDManager userspace driver & rumble sender
-│   ├── DualSenseEmulationKit/                # Virtual DualSense 5 emulation library
-│   │   ├── DualSenseConstants.swift          # Sony VID 0x054C, PID 0x0CE6 & HID descriptor
-│   │   ├── DualSenseButtonTarget.swift       # Target buttons (Touchpad, Cross, Circle, etc.)
-│   │   ├── RemappingProfile.swift            # Customization profile model & default presets
-│   │   ├── DualSenseReportPacker.swift       # 64-byte USB Input Report 0x01 packer
-│   │   ├── DualSenseVirtualDevice.swift      # Virtual HID device actor (CoreHID / IOKit)
-│   │   ├── DualSenseEmulator.swift           # Pipeline coordinator & rumble loopback
-│   │   └── PermissionHelper.swift            # Accessibility & Input Monitoring helper
-│   └── ControllerTester/                     # Unified SwiftUI diagnostic & configuration app
-│       ├── ControllerTesterApp.swift         # App entry point & background lifecycle delegate
+│   ├── EightBitDoKit/                        # Native IOKit driver library
+│   │   ├── EightBitDoConstants.swift         # VID 0x2DC8, PID 0x6012, report IDs
+│   │   ├── EightBitDoButton.swift            # Physical input enum (including M1 & M2)
+│   │   ├── EightBitDoState.swift             # Snapshot model & IMU telemetry
+│   │   ├── EightBitDoPacketDecoder.swift     # 500 Hz 34-byte decoder + orientation filter
+│   │   └── EightBitDoDevice.swift            # IOHIDManager driver & rumble dispatcher
+│   └── ControllerTester/                     # SwiftUI diagnostic application
+│       ├── ControllerTesterApp.swift         # App entry point & background lifecycle
 │       ├── Models/
-│       │   ├── MenuBarManager.swift          # NSStatusItem menu bar icon & background controls
-│       │   ├── ControllerManager.swift       # Integrates EightBitDoKit with Apple GCController
-│       │   ├── GamepadState.swift            # Live state model & telemetry
+│       │   ├── ControllerManager.swift       # Bridges EightBitDoKit and GCController
 │       │   ├── DriftDiagnosticManager.swift  # Deadzone & 72-bin circularity diagnostics
-│       │   ├── HapticsManager.swift          # CoreHaptics engine & rumble waveform tester
-│       │   ├── InputLogManager.swift         # Event logger with filters & clipboard export
+│       │   ├── GamepadState.swift            # Live state model & telemetry
+│       │   ├── HapticsManager.swift          # CoreHaptics engine & rumble waveforms
+│       │   ├── InputLogManager.swift         # Event logger with filters & export
+│       │   ├── MenuBarManager.swift          # macOS menu bar status icon
 │       │   └── SimulatedController.swift     # 60 Hz virtual demo engine
 │       └── Views/
-│           ├── MainView.swift                # NavigationSplitView sidebar & tab routing
-│           ├── DS5EmulatorView.swift         # DS5 Emulation status, pipeline, & controls
-│           ├── RemappingView.swift           # Button matrix, M1/M2 paddle, deadzone editor
-│           ├── GamepadOverviewView.swift     # Real-time vector gamepad canvas visualizer
+│           ├── MainView.swift                # Sidebar navigation & tab routing
+│           ├── GamepadOverviewView.swift     # Vector gamepad canvas visualizer
 │           ├── DriftDiagnosticView.swift     # Thumbstick polar radars & circularity test
 │           ├── TriggerButtonHealthView.swift # Analog trigger meters & button hit counters
-│           ├── MotionSensorDetailView.swift  # 3D attitude horizon & gyro meters
-│           └── HapticsView.swift             # Rumble patterns & emergency stop
+│           ├── MotionSensorDetailView.swift  # 3D attitude horizon & gyro dials
+│           ├── HapticsView.swift             # Rumble patterns & emergency stop
+│           └── Components/                   # Reusable vector dials, radars, and canvas
 └── Tests/
     └── ControllerTesterTests/
-        └── ControllerTesterTests.swift       # Unit tests for packet decoder, packer, & profiles
+        └── ControllerTesterTests.swift       # Unit tests for decoder, drift, and state
 ```
 
 ---
 
 ## License
 
-MIT License. Designed with ❤️ for macOS gamers.
+MIT License.

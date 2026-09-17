@@ -11,10 +11,6 @@ let package = Package(
             name: "EightBitDoKit",
             targets: ["EightBitDoKit"]
         ),
-        .library(
-            name: "DualSenseEmulationKit",
-            targets: ["DualSenseEmulationKit"]
-        ),
         .executable(
             name: "ControllerTester",
             targets: ["ControllerTester"]
@@ -26,19 +22,14 @@ let package = Package(
             dependencies: [],
             path: "Sources/EightBitDoKit"
         ),
-        .target(
-            name: "DualSenseEmulationKit",
-            dependencies: ["EightBitDoKit"],
-            path: "Sources/DualSenseEmulationKit"
-        ),
         .executableTarget(
             name: "ControllerTester",
-            dependencies: ["EightBitDoKit", "DualSenseEmulationKit"],
+            dependencies: ["EightBitDoKit"],
             path: "Sources/ControllerTester"
         ),
         .testTarget(
             name: "ControllerTesterTests",
-            dependencies: ["ControllerTester", "EightBitDoKit", "DualSenseEmulationKit"]
+            dependencies: ["ControllerTester", "EightBitDoKit"]
         ),
     ]
 )

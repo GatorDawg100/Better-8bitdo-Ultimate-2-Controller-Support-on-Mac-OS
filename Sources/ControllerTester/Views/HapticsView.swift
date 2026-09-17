@@ -14,13 +14,6 @@ public struct HapticsView: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                if let advisory = hardwareAdvisory {
-                    HardwareAdvisoryView(
-                        title: "Haptics & Vibration Advisory",
-                        message: advisory
-                    )
-                }
-                
                 // Unified Haptics Tester
                 HapticsTesterView(haptics: hapticsManager, hasHaptics: hasHaptics)
             }

@@ -78,14 +78,14 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         decoder.resetOrientation()
     }
     
-    /// Issues a force-feedback rumble report (Output Report ID 5) to the controller motors.
+    /// Issues a force-feedback rumble report to the controller motors.
     /// - Parameters:
     ///   - lowFrequency: Heavy rumble motor (0.0 to 1.0)
     ///   - highFrequency: Light rumble motor (0.0 to 1.0)
     public func sendRumble(lowFrequency: Float, highFrequency: Float) {
-        let intensity = max(0.0, min(1.0, max(lowFrequency, highFrequency)))
-        let val = UInt8(intensity * 100.0)
-        sendRumbleRaw(val)
+        let heavy = UInt8(max(0.0, min(1.0, lowFrequency)) * 100.0)
+        let light = UInt8(max(0.0, min(1.0, highFrequency)) * 100.0)
+        sendRumbleMotors(heavy: heavy, light: light)
     }
     
     public func sendRumble(lowFrequency: Float, highFrequency: Float, duration: TimeInterval) {
@@ -96,10 +96,14 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
     }
     
     public func stopRumble() {
-        sendRumbleRaw(0)
+        sendRumbleMotors(heavy: 0, light: 0)
     }
     
     public func sendRumbleRaw(_ val: UInt8) {
+        sendRumbleMotors(heavy: val, light: val)
+    }
+    
+    public func sendRumbleMotors(heavy: UInt8, light: UInt8) {
         lock.lock()
         guard let dev = device else {
             lock.unlock()
@@ -108,23 +112,34 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         lock.unlock()
         
         queue.async {
-            var report: [UInt8] = [val, val, val, val]
+            // Output Report ID 5: [heavy, light, heavy, light]
+            var report5: [UInt8] = [heavy, light, heavy, light]
             let res = IOHIDDeviceSetReport(
                 dev,
                 kIOHIDReportTypeOutput,
                 CFIndex(EightBitDoConstants.outputReportID),
-                &report,
-                CFIndex(report.count)
+                &report5,
+                CFIndex(report5.count)
             )
+            
             if res != kIOReturnSuccess {
-                // Re-open device if communication timed out
-                _ = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
+                // Feature Report fallback
+                _ = IOHIDDeviceSetReport(
+                    dev,
+                    kIOHIDReportTypeFeature,
+                    CFIndex(EightBitDoConstants.outputReportID),
+                    &report5,
+                    CFIndex(report5.count)
+                )
+                
+                // 2-byte Output Report fallback: [heavy, light]
+                var report2: [UInt8] = [heavy, light]
                 _ = IOHIDDeviceSetReport(
                     dev,
                     kIOHIDReportTypeOutput,
-                    CFIndex(EightBitDoConstants.outputReportID),
-                    &report,
-                    CFIndex(report.count)
+                    1,
+                    &report2,
+                    CFIndex(report2.count)
                 )
             }
         }
@@ -136,7 +151,25 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         manager = mgr
         
-        IOHIDManagerSetDeviceMatching(mgr, nil)
+        let matchDict = [
+            kIOHIDVendorIDKey as String: EightBitDoConstants.vendorID
+        ] as CFDictionary
+        IOHIDManagerSetDeviceMatching(mgr, matchDict)
+        
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        IOHIDManagerRegisterDeviceMatchingCallback(mgr, { context, result, sender, device in
+            guard let context = context else { return }
+            let driver = Unmanaged<EightBitDoDevice>.fromOpaque(context).takeUnretainedValue()
+            driver.attachDevice(device)
+        }, context)
+        
+        IOHIDManagerRegisterDeviceRemovalCallback(mgr, { context, result, sender, device in
+            guard let context = context else { return }
+            let driver = Unmanaged<EightBitDoDevice>.fromOpaque(context).takeUnretainedValue()
+            driver.detachDevice(device)
+        }, context)
+        
+        IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         let openRes = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
         if openRes != kIOReturnSuccess {
             print("[EightBitDoKit] Failed to open IOHIDManager: \(openRes)")
@@ -147,7 +180,7 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         
         // Start periodic scan timer to handle controller wake from sleep
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.5)
+        timer.schedule(deadline: .now() + 1.0, repeating: 2.0)
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
             self.lock.lock()
@@ -167,11 +200,10 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
         
         for dev in deviceSet {
             let vid = getIntProperty(device: dev, key: kIOHIDVendorIDKey)
-            let pid = getIntProperty(device: dev, key: kIOHIDProductIDKey)
-            let name = getStringProperty(device: dev, key: kIOHIDProductKey) ?? ""
+            let name = (getStringProperty(device: dev, key: kIOHIDProductKey) ?? "").lowercased()
             
-            let isVendorMatch = (vid == EightBitDoConstants.vendorID) && (EightBitDoConstants.supportedProductIDs.contains(pid) || pid == 0)
-            let isNameMatch = name.contains("8BitDo") && (name.contains("Ultimate") || name.contains("Wireless"))
+            let isVendorMatch = (vid == EightBitDoConstants.vendorID)
+            let isNameMatch = name.contains("8bitdo") || name.contains("ultimate")
             
             if isVendorMatch || isNameMatch {
                 attachDevice(dev)
@@ -195,9 +227,7 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
             return
         }
         
-        if let runLoop = CFRunLoopGetMain() {
-            IOHIDDeviceScheduleWithRunLoop(dev, runLoop, CFRunLoopMode.commonModes.rawValue)
-        }
+        IOHIDDeviceScheduleWithRunLoop(dev, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         
         guard let buffer = reportBuffer else { return }
         
@@ -222,6 +252,28 @@ public final class EightBitDoDevice: ObservableObject, @unchecked Sendable {
             self.isConnected = true
             self.onConnectionChanged?(true)
             print("[EightBitDoKit] Connected: \(name)")
+        }
+    }
+    
+    private func detachDevice(_ dev: IOHIDDevice) {
+        lock.lock()
+        guard device == dev else {
+            lock.unlock()
+            return
+        }
+        device = nil
+        lock.unlock()
+        
+        IOHIDDeviceUnscheduleFromRunLoop(dev, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+        if let buf = reportBuffer {
+            IOHIDDeviceRegisterInputReportCallback(dev, buf, 64, nil, nil)
+        }
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isConnected = false
+            self.onConnectionChanged?(false)
+            print("[EightBitDoKit] Disconnected")
         }
     }
     

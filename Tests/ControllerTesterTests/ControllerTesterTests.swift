@@ -2,7 +2,6 @@ import Testing
 import Foundation
 @testable import ControllerTester
 import EightBitDoKit
-import DualSenseEmulationKit
 
 @Suite("Controller Tester Core Tests")
 struct ControllerTesterTests {
@@ -125,11 +124,11 @@ struct ControllerTesterTests {
         bytes[3] = 0    // LY Max Up (inverted)
         bytes[4] = 128  // RX Center
         bytes[5] = 128  // RY Center
-        bytes[6] = 0x01 // Button A (bit 0)
-        bytes[7] = (1 << 5) // L3 (bit 5)
-        bytes[8] = 255  // LT Max
-        bytes[9] = 128  // RT 50%
-        bytes[10] = 0x03 // Paddles M1 (bit 0) and M2 (bit 1)
+        bytes[6] = 255  // LT Max
+        bytes[7] = 128  // RT 50%
+        bytes[8] = (1 << 0) | (1 << 5) | (1 << 2) // Button A (bit 0), M1 (bit 5), M2 (bit 2)
+        bytes[9] = (1 << 5) | (1 << 4) // L3 (bit 5), Home (bit 4)
+        bytes[10] = (1 << 0) | (1 << 1) // L4 (bit 0), R4 (bit 1)
         
         let data = Data(bytes)
         let state = decoder.decode(data: data, timestamp: 100.0)
@@ -140,64 +139,76 @@ struct ControllerTesterTests {
         #expect(s.buttonA == true)
         #expect(s.buttonB == false)
         #expect(s.buttonL3 == true)
+        #expect(s.buttonHome == true)
+        #expect(s.isPressed(.home) == true)
         #expect(s.dpadUp == true)
         #expect(s.paddleM1 == true)
         #expect(s.paddleM2 == true)
+        #expect(s.buttonL4 == true)
+        #expect(s.buttonR4 == true)
+        #expect(s.isPressed(.l4) == true)
+        #expect(s.isPressed(.r4) == true)
         #expect(s.leftTrigger == 1.0)
         #expect(abs(s.rightTrigger - 0.502) < 0.01)
         #expect(s.leftStick.x > 0.95)
         #expect(s.leftStick.y > 0.95)
     }
     
-    // MARK: - DualSenseEmulationKit Tests
-    
-    @Test("DualSenseReportPacker produces valid 64-byte DualSense report with Touchpad mapping")
-    func testDualSenseReportPacker() {
-        var packer = DualSenseReportPacker()
-        var ebState = EightBitDoState()
+    @Test("Left Trigger digital bit does not trigger Home button")
+    func testLeftTriggerDoesNotTriggerHome() {
+        let decoder = EightBitDoPacketDecoder()
+        var bytes = [UInt8](repeating: 0, count: 34)
+        bytes[0] = 0x01
+        bytes[6] = 255      // Analog LT full pull (Byte 6)
+        bytes[9] = (1 << 0) // Digital LT bit in byte 9
         
-        ebState.buttonA = true
-        ebState.paddleM1 = true // Should map to Touchpad Click in standard profile!
-        ebState.paddleM2 = true // Should map to L3 in standard profile!
-        ebState.leftTrigger = 0.8
-        ebState.rightTrigger = 1.0
-        
-        let profile = RemappingProfile.standard
-        let report = packer.pack(state: ebState, profile: profile)
-        
-        #expect(report.count == 64)
-        #expect(report[0] == 0x01) // Report ID 1
-        
-        // Face button byte 8: Cross is bit 5 (0x20)
-        let b8 = report[8]
-        #expect((b8 & 0x20) != 0)
-        
-        // Touchpad click byte 10: Bit 1 (0x02)
-        let b10 = report[10]
-        #expect((b10 & 0x02) != 0) // Touchpad click mapped from M1!
-        
-        // Analog triggers: Byte 5 (L2) and Byte 6 (R2)
-        #expect(report[5] > 180)
-        #expect(report[6] == 255)
+        let state = decoder.decode(data: Data(bytes), timestamp: 1.0)
+        #expect(state != nil)
+        #expect(state?.buttonHome == false)
+        #expect(state?.leftTrigger == 1.0)
     }
     
-    @Test("RemappingProfile JSON serialization and default presets")
-    func testRemappingProfileSerialization() throws {
-        let profile = RemappingProfile.standard
-        #expect(profile.buttonMap[.paddleM1] == .touchpad)
-        #expect(profile.buttonMap[.paddleM2] == .l3)
+    @Test("EightBitDoPacketDecoder decodes 6-axis IMU accelerometer and gyroscope")
+    func testIMUDecoding() {
+        let decoder = EightBitDoPacketDecoder()
+        decoder.resetOrientation()
         
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(profile)
+        var bytes = [UInt8](repeating: 0, count: 34)
+        bytes[0] = 0x01 // Report ID 1
         
-        let decoder = JSONDecoder()
-        let decoded = try decoder.decode(RemappingProfile.self, from: data)
+        // Flat on table facing up: az ≈ +4096 (+1.0g), ax = 0, ay = 0
+        let azLE: UInt16 = 4096
+        bytes[19] = UInt8(azLE & 0xFF)
+        bytes[20] = UInt8((azLE >> 8) & 0xFF)
         
-        #expect(decoded.id == profile.id)
-        #expect(decoded.name == profile.name)
-        #expect(decoded.buttonMap[.paddleM1] == .touchpad)
-        #expect(decoded.buttonMap[.paddleM2] == .l3)
-        #expect(decoded.rumbleEnabled == profile.rumbleEnabled)
-        #expect(decoded.gyroEnabled == profile.gyroEnabled)
+        // Initial state decode
+        let s1 = decoder.decode(data: Data(bytes), timestamp: 1.0)
+        #expect(s1 != nil)
+        guard let state1 = s1 else { return }
+        
+        #expect(abs(state1.acceleration.z - 1.0) < 0.05)
+        #expect(abs(state1.pitch) < 1.0)
+        #expect(abs(state1.roll) < 1.0)
+        
+        // Tilt forward (nose down): ay goes positive -> roll goes positive (swapped axes)
+        let ayLE: UInt16 = 2048 // ~ +0.5g
+        bytes[17] = UInt8(ayLE & 0xFF)
+        bytes[18] = UInt8((ayLE >> 8) & 0xFF)
+        
+        let s2 = decoder.decode(data: Data(bytes), timestamp: 1.05)
+        #expect(s2 != nil)
+        guard let state2 = s2 else { return }
+        #expect(state2.roll > 0.0) // Roll is positive when tilted forward (swapped axes)
+        
+        // Tilt left: ax goes negative -> pitch goes positive
+        let axLE: UInt16 = UInt16(bitPattern: -2048)
+        bytes[15] = UInt8(axLE & 0xFF)
+        bytes[16] = UInt8((axLE >> 8) & 0xFF)
+        
+        let s3 = decoder.decode(data: Data(bytes), timestamp: 1.10)
+        #expect(s3 != nil)
+        guard let state3 = s3 else { return }
+        #expect(state3.pitch > 0.0) // Pitch is positive when tilted left
     }
 }
+

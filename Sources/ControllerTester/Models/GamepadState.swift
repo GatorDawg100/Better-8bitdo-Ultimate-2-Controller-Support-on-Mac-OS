@@ -88,9 +88,11 @@ public final class GamepadState: ObservableObject {
     @Published public var buttonX: ButtonInputState = ButtonInputState()
     @Published public var buttonY: ButtonInputState = ButtonInputState()
     
-    // Shoulders
+    // Shoulders & Extra Bumpers
     @Published public var leftShoulder: ButtonInputState = ButtonInputState()
     @Published public var rightShoulder: ButtonInputState = ButtonInputState()
+    @Published public var buttonL4: ButtonInputState = ButtonInputState()
+    @Published public var buttonR4: ButtonInputState = ButtonInputState()
     
     // Triggers
     @Published public var leftTrigger: ButtonInputState = ButtonInputState()
@@ -165,6 +167,8 @@ public final class GamepadState: ObservableObject {
         buttonY.resetCount()
         leftShoulder.resetCount()
         rightShoulder.resetCount()
+        buttonL4.resetCount()
+        buttonR4.resetCount()
         leftTrigger.resetCount()
         rightTrigger.resetCount()
         dpadUp.resetCount()

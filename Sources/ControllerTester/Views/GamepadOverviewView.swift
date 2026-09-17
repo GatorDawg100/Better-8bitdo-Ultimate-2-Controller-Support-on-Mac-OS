@@ -20,14 +20,6 @@ public struct GamepadOverviewView: View {
                 .frame(height: 380)
                 .padding(.horizontal)
                 
-                if let advisory = state.hardwareAdvisory {
-                    HardwareAdvisoryView(
-                        title: "8BitDo Mode Advisory (Why Gyro & Haptics are Inactive)",
-                        message: advisory
-                    )
-                    .padding(.horizontal)
-                }
-                
                 // Quick Telemetry Overview Cards
                 HStack(spacing: 14) {
                     // Left Stick Summary
